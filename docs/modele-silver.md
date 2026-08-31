@@ -1,168 +1,108 @@
 # Modèle de données — couche Silver
 
-Ce document dit **ce que Silver doit être**, avant de regarder le SQL. ClickHouse n’a pas de clés étrangères : le modèle est **logique**. Les contraintes sont appliquées à la reconstruction (`sql/03_silver.sql`), pas par le moteur.
+Modèle **en étoile**, calé sur le besoin métier (§4 du sujet). ClickHouse n’a pas de clés étrangères : le modèle est **logique**. Le SQL (`sql/03_silver.sql`) l’applique à chaque rebuild.
 
-Silver = **table de vérité métier** : nettoyée, dédupliquée, enrichie, sans identité. Gold ne fait qu’agréger à partir d’ici.
+## 1. Trois faits, trois dimensions
 
-## 1. Intention
+Le séjour n’est plus « le tout-en-un ». Chaque fait a **un grain**, et les libellés vivent dans des **dimensions**.
 
-On veut un modèle en étoile **autour du séjour** (fait hospitalier), pas un clone des fichiers CHU.
-
-| Entité | Grain (1 ligne =) | Rôle |
+| Table | Type | Grain (1 ligne =) |
 |---|---|---|
-| `patients` | 1 patient pseudonymisé | Dimension personne (minimisée) |
-| `sejours` | 1 passage à l’hôpital | Fait central |
-| `diagnostics` | 1 code CIM-10 d’un séjour | Dimension pathologie (plusieurs par séjour) |
-| `monitoring` | 1 relevé de constantes | Fait de séries temporelles, rattaché au séjour |
-| `rejets` | 1 ligne écartée + sa règle | Quarantaine / traçabilité, **hors** du modèle d’analyse |
+| `fact_sejour` | **Fait** | 1 passage à l’hôpital |
+| `fact_diagnostic` | **Fait** | 1 code CIM-10 posé sur un séjour |
+| `fact_monitoring` | **Fait** | 1 relevé de constantes au chevet |
+| `dim_patient` | Dimension | 1 patient pseudonymisé |
+| `dim_service` | Dimension | 1 service d’hospitalisation |
+| `dim_cim10` | Dimension | 1 code de pathologie |
+| `rejets` | Hors modèle d’analyse | 1 ligne écartée + la règle |
 
-Ce qu’on **ne** met pas en Silver comme tables séparées : `ref_services` et `ref_cim10`. Ce sont des nomenclatures bronze, **dénormalisées** dans `sejours.service_label` et `diagnostics.libelle`. En analytics, un join de plus à chaque KPI n’apporte rien une fois le libellé figé.
-
-## 2. Schéma logique
+Pourquoi le diagnostic est un **fait** et pas une dimension ? Parce qu’un séjour porte **plusieurs** codes (1 principal + 0..n associés) : c’est un événement de codage, pas un attribut du séjour.
 
 ```mermaid
 erDiagram
-    patients {
-        string patient_pseudo PK "SHA-256 sel plus IPP"
-        uint16 birth_year "annee seulement RGPD"
-        string sex "M ou F"
+    dim_patient {
+        string patient_pseudo PK
+        uint16 birth_year
+        string sex
         string region_code
-        int16 age_approx "annee courante moins birth_year"
-        date source_date "dump patients le plus recent"
+        int16 age_approx
     }
-    sejours {
+    dim_service {
+        string service_code PK
+        string service_label
+    }
+    dim_cim10 {
+        string code_cim10 PK
+        string libelle
+    }
+    fact_sejour {
         string stay_id PK
         string patient_pseudo FK
-        string service_code
-        string service_label "depuis referentiel"
+        string service_code FK
         datetime admission_ts
         datetime discharge_ts "NULL si en cours"
         string admission_mode
         string discharge_mode
-        float duree_heures "NULL si en cours"
-        uint8 est_en_cours
-        uint16 birth_year "copie patient"
-        int16 age_approx "copie patient"
-        string sex "copie patient"
-        string region_code "copie patient"
-        date source_date
+        float duree_heures "mesure"
+        uint8 est_en_cours "mesure"
     }
-    diagnostics {
+    fact_diagnostic {
         string stay_id FK
-        string code_cim10
+        string code_cim10 FK
         string type "principal ou associe"
-        string libelle "depuis referentiel"
-        date source_date
     }
-    monitoring {
+    fact_monitoring {
         string stay_id FK
         datetime ts
-        int32 heart_rate "20-250"
-        int32 spo2 "50-100"
-        float temp_c "30-45"
-        date source_date
-    }
-    rejets {
-        string domaine
-        string regle
-        string stay_id "optionnel"
-        string patient_pseudo "optionnel"
-        date source_date
-        string detail
-        datetime rejected_at
+        int32 heart_rate
+        int32 spo2
+        float temp_c
     }
 
-    patients ||--o{ sejours : "1 patient 0-n sejours"
-    sejours ||--|{ diagnostics : "1 sejour 1-n codes"
-    sejours ||--o{ monitoring : "1 sejour 0-n releves"
-    sejours ||--o{ rejets : "sejour ecarte ou orphelin"
-    patients ||--o{ rejets : "patient invalide"
+    dim_patient ||--o{ fact_sejour : "1 patient 0-n sejours"
+    dim_service ||--o{ fact_sejour : "1 service 0-n sejours"
+    fact_sejour ||--|{ fact_diagnostic : "1 sejour 1-n codes"
+    dim_cim10 ||--o{ fact_diagnostic : "1 pathologie 0-n poses"
+    fact_sejour ||--o{ fact_monitoring : "1 sejour 0-n releves"
 ```
 
-Cardinalités visées :
+On **ne dénormalise plus** l’âge ou le libellé CIM-10 dans les faits. Gold joint la dimension au moment de l’agrégat.
 
-- Un **patient** a 0..n séjours (un patient du dump peut n’avoir aucun passage sur la fenêtre).
-- Un **séjour** a **au moins** un diagnostic principal dans les sources ; Silver ne garde que les diagnostics dont le séjour a passé les contrôles.
-- Un **séjour** a 0..n relevés monitoring (pas tous les lits sont monitorés en continu dans l’exercice).
-- **Rejets** n’entre dans aucun indicateur.
+## 2. Lien avec le §4 (un fait par famille d’indicateurs)
 
-## 3. Clés et jointures
-
-| Table | Clé métier | Jointure |
+| Indicateur du sujet | Fait lu | Dimensions |
 |---|---|---|
-| `patients` | `patient_pseudo` | Hash déterministe du IPP, **stable** d’un jour à l’autre |
-| `sejours` | `stay_id` | Identifiant CHU du passage, unique |
-| `diagnostics` | `(stay_id, type, code_cim10)` | Un même code peut être principal **ou** associé, pas les deux sur un séjour dans nos sources |
-| `monitoring` | `(stay_id, ts)` | Un relevé = un instant pour un séjour |
-| `rejets` | pas de clé métier | Journal, pas une dimension |
+| DMS par service | `fact_sejour` (sortis) | `dim_service` |
+| Passages urgences / jour | `fact_sejour` (`service_code = URGENCES`) | — |
+| Réadmission 30 jours | `fact_sejour` (auto-jointure patient) | `dim_service` |
+| Relevés en alerte / jour | `fact_monitoring` | — |
+| Prévalence par pathologie | `fact_diagnostic` (type principal) | `dim_cim10`, via `fact_sejour` pour le patient |
+| Distribution âge × sexe | `fact_sejour` ⋈ `dim_patient` | `dim_patient` |
 
-Il n’y a **plus** d’IPP, NIR, nom, prénom. Les jointures patients ↔ séjours passent uniquement par `patient_pseudo`.
+`rejets` n’alimente **aucun** KPI. C’est la quarantaine (qualité / traçabilité), pas un 4ᵉ fait métier.
 
-## 4. Pourquoi dénormaliser le patient dans `sejours` ?
+## 3. Mesures portées par les faits
 
-Gold calcule DMS, réadmission, cohortes âge × sexe **à partir des séjours**. Recopier `sex`, `age_approx`, `birth_year`, `region_code` sur le séjour évite un join à chaque KPI.
-
-Ce n’est pas une 3NF de DPI. C’est un **modèle analytique** : on paie un peu de redondance pour des agrégats simples et reproductibles.
-
-`patients` reste utile : déduplication du dump quotidien, et point unique si demain on ajoute une vue « file active des patients connus » sans passer par les séjours.
-
-## 5. Règles qui **fabriquent** ce modèle
-
-Silver n’est pas « bronze avec des types ». Une ligne n’entre que si elle respecte le contrat ci-dessous.
-
-```mermaid
-flowchart TD
-    B[Bronze typé historisé]
-    R[rejets]
-    P[patients 1 ligne par pseudo]
-    S[séjours valides]
-    D[diagnostics des séjours valides]
-    M[monitoring dans les bornes]
-    B -->|déduplication plus recent sexe M/F année plausible| P
-    B -->|sexe ou naissance invalide| R
-    B -->|sortie avant entrée| R
-    B -->|sortie vide = en cours OK| S
-    P -->|enrichit âge sexe région| S
-    B -->|ref services| S
-    B -->|diagnostique d'un séjour absent| R
-    S --> D
-    B -->|ref CIM-10| D
-    B -->|FC SpO2 temp hors plage| R
-    B -->|dans les bornes| M
-```
-
-| Contrat | Traduction dans le modèle |
+| Fait | Mesures / attributs de fait |
 |---|---|
-| 1 patient = 1 ligne | `patients` dédupliqué sur `patient_pseudo` |
-| Séjour en cours légitime | `discharge_ts` NULL, `est_en_cours = 1`, `duree_heures` NULL |
-| Séjour incohérent | **absent** de `sejours`, présent dans `rejets` |
-| Diagnostic d’un séjour rejeté | **absent** de `diagnostics` (intégrité référentielle logique) |
-| Constante non physiologique | **absente** de `monitoring` |
-| Pas d’identité | aucune colonne nominative |
+| Séjour | `duree_heures`, `est_en_cours`, modes d’entrée/sortie, horodatages |
+| Diagnostic | `type` (principal / associé) — fait sans quantité, souvent appelé *factless fact* |
+| Monitoring | `heart_rate`, `spo2`, `temp_c` |
 
-## 6. Colonnes calculées (pas dans les fichiers)
+`age_approx` est un attribut de **`dim_patient`**, calculé `année_courante − birth_year` (minimisation RGPD : pas de jour de naissance).
 
-| Colonne | Table | Formule / règle |
-|---|---|---|
-| `age_approx` | patients, sejours | `année_courante − birth_year` |
-| `duree_heures` | sejours | `(discharge_ts − admission_ts)` en heures, NULL si en cours |
-| `est_en_cours` | sejours | 1 ssi `discharge_ts` IS NULL |
-| `service_label` | sejours | lookup `ref_services` |
-| `libelle` | diagnostics | lookup `ref_cim10` |
-| `patient_pseudo` | patients, sejours | déjà calculé **à l’entrée du lake** |
+## 4. Contrôles qui fabriquent les faits
 
-## 7. Ce que Gold a le droit de lire
+| Contrat | Où ça se voit |
+|---|---|
+| Dump patients dédupliqué | 1 ligne dans `dim_patient` |
+| `discharge_ts` vide | `fact_sejour.est_en_cours = 1`, `duree_heures` NULL |
+| Sortie avant entrée | **absent** de `fact_sejour`, dans `rejets` |
+| Diagnostic d’un séjour rejeté | **absent** de `fact_diagnostic` |
+| Constante hors 20–250 / 50–100 / 30–45 | **absent** de `fact_monitoring` |
 
-Uniquement Silver « propre » (`patients`, `sejours`, `diagnostics`, `monitoring`).
+## 5. Limites
 
-- Pilotage : agrégats sur `sejours` et `monitoring` (DMS, urgences, réadmission, alertes). `rejets` n’est exposé en gold pilotage que **compté** (qualité), jamais ligne à ligne.
-- Recherche : `diagnostics` type `principal` ⋈ `sejours`, puis `HAVING n ≥ 5`.
-
-Si un chiffre gold n’est pas rejouable par un `SELECT` sur ces tables, le modèle est faux.
-
-## 8. Limites du modèle
-
-- Pas de contrainte d’unicité déclarée dans ClickHouse : l’unicité est un **contrat du pipeline** (rebuild).
-- `age_approx` n’est pas un âge civil (minimisation RGPD).
-- Monitoring n’est pas rattaché au patient directement : le chemin est toujours **relevé → séjour → patient**.
-- `rejets` peut pointer un `stay_id` qui n’existe plus en `sejours` : c’est voulu (on documente ce qu’on a jeté).
+- Pas de FK déclarée dans ClickHouse : l’intégrité est un contrat du pipeline.
+- Le chemin patient pour un relevé est toujours **monitoring → séjour → patient**.
+- `rejets.stay_id` peut ne plus exister dans `fact_sejour` : normal, on documente ce qui a été jeté.

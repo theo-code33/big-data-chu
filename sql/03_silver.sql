@@ -1,10 +1,18 @@
--- Silver est reconstruit à chaque run depuis bronze (volume faible, règles toujours à jour).
+-- Silver : modèle en étoile.
+-- 3 faits (séjour, diagnostic, monitoring) + dimensions + quarantaine rejets.
+-- Rebuild à chaque run depuis bronze.
 
 DROP TABLE IF EXISTS eds_silver.rejets;
 DROP TABLE IF EXISTS eds_silver.patients;
 DROP TABLE IF EXISTS eds_silver.sejours;
 DROP TABLE IF EXISTS eds_silver.diagnostics;
 DROP TABLE IF EXISTS eds_silver.monitoring;
+DROP TABLE IF EXISTS eds_silver.dim_patient;
+DROP TABLE IF EXISTS eds_silver.dim_service;
+DROP TABLE IF EXISTS eds_silver.dim_cim10;
+DROP TABLE IF EXISTS eds_silver.fact_sejour;
+DROP TABLE IF EXISTS eds_silver.fact_diagnostic;
+DROP TABLE IF EXISTS eds_silver.fact_monitoring;
 
 CREATE TABLE eds_silver.rejets
 (
@@ -19,7 +27,7 @@ CREATE TABLE eds_silver.rejets
 ENGINE = MergeTree
 ORDER BY (domaine, source_date, regle);
 
-CREATE TABLE eds_silver.patients
+CREATE TABLE eds_silver.dim_patient
 (
     patient_pseudo String,
     birth_year     UInt16,
@@ -31,39 +39,52 @@ CREATE TABLE eds_silver.patients
 ENGINE = MergeTree
 ORDER BY patient_pseudo;
 
-CREATE TABLE eds_silver.sejours
+CREATE TABLE eds_silver.dim_service
+(
+    service_code   String,
+    service_label  String
+)
+ENGINE = MergeTree
+ORDER BY service_code;
+
+CREATE TABLE eds_silver.dim_cim10
+(
+    code_cim10 String,
+    libelle    String
+)
+ENGINE = MergeTree
+ORDER BY code_cim10;
+
+-- Fait 1 — grain : 1 ligne = 1 passage à l'hôpital.
+CREATE TABLE eds_silver.fact_sejour
 (
     stay_id          String,
     patient_pseudo   String,
     service_code     LowCardinality(String),
-    service_label    String,
     admission_ts     DateTime,
     discharge_ts     Nullable(DateTime),
     admission_mode   LowCardinality(String),
     discharge_mode   LowCardinality(String),
     duree_heures     Nullable(Float64),
     est_en_cours     UInt8,
-    birth_year       UInt16,
-    age_approx       Int16,
-    sex              LowCardinality(String),
-    region_code      String,
     source_date      Date
 )
 ENGINE = MergeTree
 ORDER BY stay_id;
 
-CREATE TABLE eds_silver.diagnostics
+-- Fait 2 — grain : 1 ligne = 1 code CIM-10 posé sur un séjour (principal ou associé).
+CREATE TABLE eds_silver.fact_diagnostic
 (
     stay_id        String,
     code_cim10     LowCardinality(String),
     type           LowCardinality(String),
-    libelle        String,
     source_date    Date
 )
 ENGINE = MergeTree
 ORDER BY (stay_id, type, code_cim10);
 
-CREATE TABLE eds_silver.monitoring
+-- Fait 3 — grain : 1 ligne = 1 relevé de constantes au chevet.
+CREATE TABLE eds_silver.fact_monitoring
 (
     stay_id        String,
     ts             DateTime,
@@ -75,7 +96,7 @@ CREATE TABLE eds_silver.monitoring
 ENGINE = MergeTree
 ORDER BY (stay_id, ts);
 
--- Rejets patients : sexe hors M/F après normalisation, année de naissance aberrante.
+-- Dimensions
 INSERT INTO eds_silver.rejets (domaine, regle, patient_pseudo, source_date, detail)
 SELECT
     'patients',
@@ -88,8 +109,7 @@ WHERE upper(trim(sex)) NOT IN ('M', 'F')
    OR birth_year < 1900
    OR birth_year > toYear(today());
 
--- Patients : dump quotidien → on garde la version la plus récente, lignes valides uniquement.
-INSERT INTO eds_silver.patients
+INSERT INTO eds_silver.dim_patient
 SELECT
     patient_pseudo,
     birth_year,
@@ -109,7 +129,21 @@ WHERE rn = 1
   AND birth_year >= 1900
   AND birth_year <= toYear(today());
 
--- Rejets séjours : cohérence temporelle (sortie avant entrée).
+INSERT INTO eds_silver.dim_service
+SELECT
+    service_code,
+    argMax(service_label, _ingested_at) AS service_label
+FROM eds_bronze.ref_services
+GROUP BY service_code;
+
+INSERT INTO eds_silver.dim_cim10
+SELECT
+    code_cim10,
+    argMax(libelle, _ingested_at) AS libelle
+FROM eds_bronze.ref_cim10
+GROUP BY code_cim10;
+
+-- Fait séjour
 INSERT INTO eds_silver.rejets (domaine, regle, stay_id, patient_pseudo, source_date, detail)
 SELECT
     'sejours',
@@ -122,49 +156,31 @@ FROM eds_bronze.sejours
 WHERE discharge_ts IS NOT NULL
   AND discharge_ts < admission_ts;
 
-INSERT INTO eds_silver.sejours
+INSERT INTO eds_silver.fact_sejour
 SELECT
-    s.stay_id,
-    s.patient_pseudo,
-    s.service_code,
-    ifNull(r.service_label, s.service_code) AS service_label,
-    s.admission_ts,
-    s.discharge_ts,
-    s.admission_mode,
-    s.discharge_mode,
-    if(s.discharge_ts IS NULL, NULL, dateDiff('second', s.admission_ts, s.discharge_ts) / 3600.0) AS duree_heures,
-    if(s.discharge_ts IS NULL, 1, 0) AS est_en_cours,
-    ifNull(p.birth_year, 0) AS birth_year,
-    ifNull(p.age_approx, 0) AS age_approx,
-    ifNull(p.sex, '') AS sex,
-    ifNull(p.region_code, '') AS region_code,
-    s._source_date AS source_date
-FROM eds_bronze.sejours AS s
-LEFT JOIN eds_silver.patients AS p ON s.patient_pseudo = p.patient_pseudo
-LEFT JOIN
-(
-    SELECT service_code, argMax(service_label, _ingested_at) AS service_label
-    FROM eds_bronze.ref_services
-    GROUP BY service_code
-) AS r ON s.service_code = r.service_code
-WHERE s.discharge_ts IS NULL
-   OR s.discharge_ts >= s.admission_ts;
+    stay_id,
+    patient_pseudo,
+    service_code,
+    admission_ts,
+    discharge_ts,
+    admission_mode,
+    discharge_mode,
+    if(discharge_ts IS NULL, NULL, dateDiff('second', admission_ts, discharge_ts) / 3600.0) AS duree_heures,
+    if(discharge_ts IS NULL, 1, 0) AS est_en_cours,
+    _source_date AS source_date
+FROM eds_bronze.sejours
+WHERE discharge_ts IS NULL
+   OR discharge_ts >= admission_ts;
 
-INSERT INTO eds_silver.diagnostics
+-- Fait diagnostic : uniquement les séjours encore en silver (intégrité logique).
+INSERT INTO eds_silver.fact_diagnostic
 SELECT
     d.stay_id,
     d.code_cim10,
     d.type,
-    ifNull(c.libelle, d.code_cim10) AS libelle,
     d._source_date AS source_date
 FROM eds_bronze.diagnostics AS d
-INNER JOIN eds_silver.sejours AS s ON d.stay_id = s.stay_id
-LEFT JOIN
-(
-    SELECT code_cim10, argMax(libelle, _ingested_at) AS libelle
-    FROM eds_bronze.ref_cim10
-    GROUP BY code_cim10
-) AS c ON d.code_cim10 = c.code_cim10;
+INNER JOIN eds_silver.fact_sejour AS s ON d.stay_id = s.stay_id;
 
 INSERT INTO eds_silver.rejets (domaine, regle, stay_id, source_date, detail)
 SELECT
@@ -174,9 +190,9 @@ SELECT
     d._source_date,
     concat('code=', d.code_cim10, ' type=', d.type)
 FROM eds_bronze.diagnostics AS d
-LEFT ANTI JOIN eds_silver.sejours AS s ON d.stay_id = s.stay_id;
+LEFT ANTI JOIN eds_silver.fact_sejour AS s ON d.stay_id = s.stay_id;
 
--- Rejets monitoring : bornes physiologiques du sujet.
+-- Fait monitoring
 INSERT INTO eds_silver.rejets (domaine, regle, stay_id, source_date, detail)
 SELECT
     'monitoring',
@@ -189,7 +205,7 @@ WHERE heart_rate < 20 OR heart_rate > 250
    OR spo2 < 50 OR spo2 > 100
    OR temp_c < 30 OR temp_c > 45;
 
-INSERT INTO eds_silver.monitoring
+INSERT INTO eds_silver.fact_monitoring
 SELECT
     stay_id,
     ts,

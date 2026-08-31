@@ -37,7 +37,7 @@ Voir le schéma du README. Choix qui se défendent à l’oral :
 
 - **Lake ≠ copie bit-à-bit des patients.** Le sujet dit « copie brute » *et* « aucune donnée identifiante dans l’entrepôt » *et* valorise le bonus « à l’entrée du lake ». On tranche : le filestorage CHU reste brut ; **notre** lake est déjà pseudonymisé. Sinon on stockerait NIR et nom sur le disque étudiant, ce qui est contraire à l’esprit RGPD du sujet.
 - **Bronze peu transformé.** Typage + colonnes techniques `_source_date`, `_ingested_at`. On peut reconstruire silver si la règle FC change.
-- **Silver = vérité métier.** C’est la seule couche où l’on joint patient / séjour / CIM-10 / service. Modèle logique : [`docs/modele-silver.md`](modele-silver.md).
+- **Silver = vérité métier**, en étoile : 3 faits + dimensions. Modèle : [`docs/modele-silver.md`](modele-silver.md).
 - **Deux gold.** Cloisonnement réel (GRANT SQL), pas un simple onglet Metabase.
 - **Pas de pandas** sur le monitoring : `file(..., Parquet)` dans ClickHouse.
 
@@ -78,9 +78,9 @@ On **n’impute pas** une date de sortie, on ne « corrige » pas une FC à 15 b
 
 `discharge_mode` vide sur un séjour **sorti** (~2 000 lignes sur 3 jours) : hors liste imposée, **conservé**. Signalé ici comme dette qualité (export incomplet), pas comme rejet silencieux.
 
-Enrichissements : libellé service, libellé CIM-10, `duree_heures`, `age_approx = année_courante − birth_year`.
+Enrichissements : `duree_heures` et `est_en_cours` sur le **fait séjour** ; `age_approx` sur **`dim_patient`**. Les libellés restent dans `dim_service` / `dim_cim10` (pas recopiés dans les faits).
 
-Le schéma logique (étoile autour du séjour, grain, cardinalités, quarantaine `rejets`) est décrit dans [`modele-silver.md`](modele-silver.md) — c’est le contrat que le SQL implémente, pas l’inverse.
+Le modèle (3 faits + dimensions) : [`modele-silver.md`](modele-silver.md).
 
 ### 4.4 Gold
 
@@ -120,24 +120,22 @@ Calculé **par service** (service du séjour index, celui dont on mesure la sort
 | SpO2 (%) | hors 50–100 | &lt; 90 |
 | Température (°C) | hors 30–45 | &lt; 36 ou &gt; 38,5 |
 
-Un relevé hors bornes qualité n’entre pas en silver : il ne peut donc pas « alerter ». L’alerte mesure l’instabilité **parmi les constantes déjà crédibles**.
+Un relevé hors bornes qualité n’entre pas en `fact_monitoring` : il ne peut donc pas « alerter ». L’alerte mesure l’instabilité **parmi les constantes déjà crédibles**.
 
-**Activité par service** : admissions, séjours en cours, mode urgence, décès — vue complémentaire demandée par le sujet (« toute autre vue d’activité pertinente »).
-
-**Rejets qualité** : counts par règle, pour **justifier** les KPI (combien de séjours ont été retirés avant calcul de la DMS).
+Pas d’autre indicateur de pilotage (pas de vue « activité / décès / rejets » : hors §4).
 
 ### Recherche
 
-**Prévalence** : `uniqExact(patient_pseudo)` par diagnostic **principal**, `HAVING >= 5`. Les associés décrivent la comorbidité, pas la cohorte index.
+**Prévalence** : `uniqExact(patient_pseudo)` par diagnostic **principal** (`fact_diagnostic` ⋈ `fact_sejour` ⋈ `dim_cim10`), `HAVING >= 5`.
 
-**Âge × sexe** : tranches 0–17 / 18–39 / 40–64 / 65+, même seuil de 5, au global et par pathologie.
+**Âge × sexe** : patients ayant au moins un séjour, tranches 0–17 / 18–39 / 40–64 / 65+, même seuil de 5.
 
 ## 6. Restitution et cloisonnement
 
-Deux dashboards Metabase :
+Deux dashboards Metabase, **uniquement** les graphes du §4 :
 
-- **Pilotage hospitalier** (collection Pilotage) — DMS, urgences, réadmissions, alertes, activité, rejets.
-- **Recherche clinique** (collection Recherche) — prévalence, pyramide âge/sexe, table pathologie × âge × sexe.
+- **Pilotage hospitalier** — DMS, passages urgences, réadmission 30 j, relevés en alerte.
+- **Recherche clinique** — prévalence par pathologie, distribution âge × sexe.
 
 Démonstration du cloisonnement :
 
@@ -159,12 +157,12 @@ Ces volumes servent à **justifier** les KPI, pas à en tirer une conclusion mé
 | Couche / contrôle | Effectif |
 |---|---|
 | Bronze patients (3 dumps) | 16 200 |
-| Silver patients (dédupliqués) | 6 000 |
+| Silver `dim_patient` (dédupliqués) | 6 000 |
 | Bronze séjours | 15 000 |
-| Silver séjours | 14 864 |
+| Silver `fact_sejour` | 14 864 |
 | Rejets `discharge_avant_admission` | 136 (44+50+42, conforme à l’exploration brute) |
 | Bronze monitoring | 66 677 |
-| Silver monitoring | 65 308 |
+| Silver `fact_monitoring` | 65 308 |
 | Rejets constantes hors plage | 1 369 |
 | Diagnostics orphelins (séjour rejeté) | 340 |
 | DMS par service | ~6,0–6,2 jours (données d’exercice, peu de variance) |

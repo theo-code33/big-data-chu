@@ -74,7 +74,7 @@ Filestorage CHU (lecture seule)
 |---|---|---|
 | **Lake** | Copie de travail. Pour les patients / séjours : déjà pseudonymisée | Le CHU reste intouchable. Le bonus RGPD exige que l’identité **n’entre pas** dans notre zone |
 | **Bronze** | Fichiers → tables typées (`Date`, `DateTime`, types numériques) + `_source_date` / `_ingested_at` | On peut **rejouer** silver/gold sans relire les fichiers. On sait d’où vient chaque ligne |
-| **Silver** | Qualité, déduplication, jointures (service, CIM-10, patient) | Seule « table de vérité » métier. Les rejets sont **tracés**, pas silencieux |
+| **Silver** | Qualité + **3 faits** (séjour, diagnostic, monitoring) et dimensions | Vérité métier. Les rejets sont tracés, pas silencieux. Détail : [`docs/modele-silver.md`](docs/modele-silver.md) |
 | **Gold** | Indicateurs **déjà agrégés**, un schéma par usage | Le dashboard ne recalcule pas la DMS. Le cloisonnement se fait ici (GRANT), pas dans l’UI seule |
 
 Pourquoi **ne pas** tout nettoyer en bronze ? Parce qu’une règle métier (bornes FC, séjour inversé) peut évoluer. Bronze reste proche du fichier ; on reconstruit silver sans ré-ingérer.
@@ -128,22 +128,21 @@ On n’est pas médecins. Le sujet demande de **détecter**, **écarter**, **tra
 
 `discharge_mode` vide alors que le séjour est sorti existe dans les fichiers : ce n’est **pas** dans la liste des rejets imposés, on conserve la ligne et on le signale dans le dossier.
 
-## 8. Indicateurs (gold)
+## 8. Indicateurs (gold) — strictement le §4 du sujet
 
 **Pilotage** (séjour sorti uniquement pour la DMS et la réadmission) :
 
-- DMS par service (moyenne des durées d’hospitalisation)
-- Passages aux urgences par jour = séjours dont `service_code = 'URGENCES'` (activité du service, pas le mode d’entrée `urgence` qui existe aussi en cardio)
-- Taux de réadmission à 30 jours : parmi les séjours sortis, part de ceux suivis d’une **nouvelle admission du même patient** dans les 30 jours
-- Relevés monitoring en alerte / jour — bornes **cliniques** plus strictes que le rejet qualité (ex. SpO2 &lt; 90 %), documentées dans le dossier
-- Vue d’activité complémentaire : admissions par service
+- DMS par service (`fact_sejour` ⋈ `dim_service`)
+- Passages aux urgences par jour = `fact_sejour` avec `service_code = 'URGENCES'` (activité du **service**, pas le mode d’entrée `urgence`)
+- Taux de réadmission à 30 jours : séjour sorti suivi d’une **nouvelle admission du même patient** dans les 30 jours
+- Relevés monitoring en alerte / jour (`fact_monitoring`) — bornes d’alerte plus strictes que le rejet qualité (ex. SpO2 &lt; 90 %)
 
 **Recherche** :
 
-- Prévalence / taille de cohorte par diagnostic **principal** (libellé CIM-10), masquée si n &lt; 5
-- Distribution par tranches d’âge et sexe (globale et par pathologie), même règle n &lt; 5
+- Prévalence / taille de cohorte par diagnostic **principal** (`fact_diagnostic`), masquée si n &lt; 5
+- Distribution par âge et sexe (`fact_sejour` ⋈ `dim_patient`), même règle n &lt; 5
 
-Chaque chiffre doit pouvoir se **rejouer** à partir de silver (SQL dans `sql/04_gold.sql`).
+Pas d’autre KPI. SQL : `sql/04_gold.sql`.
 
 ## 9. Incrémental
 

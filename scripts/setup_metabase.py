@@ -163,6 +163,15 @@ class Mb:
         created = self.post("/api/card", payload)
         return int(created["id"])
 
+    def archive_card(self, name: str, collection_id: int) -> None:
+        existing = self.find_card(name, collection_id)
+        if not existing:
+            return
+        try:
+            self.put(f"/api/card/{existing}", {"archived": True, "name": name, "collection_id": collection_id})
+        except requests.HTTPError:
+            pass
+
     def upsert_dashboard(self, name: str, collection_id: int, cards: list[tuple[int, int, int, int, int]]) -> int:
         """cards: (card_id, row, col, size_x, size_y)"""
         dash_id = None
@@ -388,29 +397,9 @@ def main() -> None:
             "Alertes monitoring par jour",
             db_p,
             col_p,
-            "SELECT jour, nb_releves, nb_alertes, pct_alertes, nb_alerte_fc, nb_alerte_spo2, nb_alerte_temp FROM eds_gold_pilotage.alertes_monitoring_jour ORDER BY jour",
+            "SELECT jour, nb_releves, nb_alertes FROM eds_gold_pilotage.alertes_monitoring_jour ORDER BY jour",
             "line",
             viz_line("jour", "nb_alertes"),
-        )
-    )
-    cards_p.append(
-        mb.upsert_card(
-            "Activité par service",
-            db_p,
-            col_p,
-            "SELECT service_label, nb_admissions, nb_en_cours, nb_mode_urgence, nb_deces FROM eds_gold_pilotage.activite_par_service ORDER BY nb_admissions DESC",
-            "bar",
-            viz_bar("service_label", "nb_admissions"),
-        )
-    )
-    cards_p.append(
-        mb.upsert_card(
-            "Rejets qualité (traçabilité)",
-            db_p,
-            col_p,
-            "SELECT domaine, regle, nb_rejets FROM eds_gold_pilotage.qualite_rejets ORDER BY nb_rejets DESC",
-            "table",
-            {},
         )
     )
 
@@ -422,10 +411,16 @@ def main() -> None:
             (cards_p[1], 0, 12, 12, 6),
             (cards_p[2], 6, 0, 12, 6),
             (cards_p[3], 6, 12, 12, 6),
-            (cards_p[4], 12, 0, 12, 6),
-            (cards_p[5], 12, 12, 12, 6),
         ],
     )
+
+    for obsolete in (
+        "Activité par service",
+        "Rejets qualité (traçabilité)",
+        "Cohorte par pathologie, âge et sexe (n ≥ 5)",
+    ):
+        mb.archive_card(obsolete, col_p)
+        mb.archive_card(obsolete, col_r)
 
     cards_r = []
     cards_r.append(
@@ -448,16 +443,6 @@ def main() -> None:
             {"graph.dimensions": ["tranche_age", "sex"], "graph.metrics": ["nb_patients"]},
         )
     )
-    cards_r.append(
-        mb.upsert_card(
-            "Cohorte par pathologie, âge et sexe (n ≥ 5)",
-            db_r,
-            col_r,
-            "SELECT libelle, tranche_age, sex, nb_patients FROM eds_gold_recherche.cohorte_pathologie_age_sexe ORDER BY libelle, tranche_age, sex",
-            "table",
-            {},
-        )
-    )
 
     mb.upsert_dashboard(
         "Recherche clinique",
@@ -465,7 +450,6 @@ def main() -> None:
         [
             (cards_r[0], 0, 0, 16, 8),
             (cards_r[1], 0, 16, 8, 8),
-            (cards_r[2], 8, 0, 24, 8),
         ],
     )
 
