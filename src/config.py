@@ -17,16 +17,10 @@ def _path(env_name: str, default: Path) -> Path:
     return p.resolve() if p.is_absolute() else (ROOT / p).resolve()
 
 
-SOURCE_FILESTORAGE = _path("SOURCE_FILESTORAGE", ROOT.parent / "source-filestorage")
+# Filestorage CHU = lecture seule. Lake = notre copie de travail.
+SOURCE_FILESTORAGE = _path("SOURCE_FILESTORAGE", ROOT / "source-filestorage")
 LAKE_ROOT = _path("LAKE_ROOT", ROOT / "lake")
-SQL_DIR = ROOT / "sql"
 LOG_DIR = _path("LOG_DIR", ROOT / "logs")
 
+# Sel de hash : même IPP → même pseudo tous les jours (jointures).
 EDS_PSEUDO_SALT = os.getenv("EDS_PSEUDO_SALT", "chu-eds-dev-salt-changez-moi")
-
-CLICKHOUSE_HOST = os.getenv("CLICKHOUSE_HOST", "localhost")
-CLICKHOUSE_HTTP_PORT = int(os.getenv("CLICKHOUSE_HTTP_PORT", "8123"))
-CLICKHOUSE_USER = os.getenv("CLICKHOUSE_USER", "eds_admin")
-CLICKHOUSE_PASSWORD = os.getenv("CLICKHOUSE_PASSWORD", "eds_admin")
-
-DOMAINS = ("patients", "sejours", "diagnostics", "monitoring", "referentiels")
