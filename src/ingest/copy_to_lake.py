@@ -2,11 +2,14 @@
 
 Règle simple :
 - patients et séjours : on réécrit le CSV **sans identité** (hash + année de naissance)
+- diagnostics : transforme JSON source (array imbriqué) en NDJSON (plat)
 - le reste : copie telle quelle (pas de PII)
 """
+
 from __future__ import annotations
 
 import csv
+import json
 import shutil
 from datetime import date
 from pathlib import Path
@@ -25,9 +28,10 @@ def copy_patients(source_date: date, src: Path) -> tuple[Path, int]:
     dest.parent.mkdir(parents=True, exist_ok=True)
     tmp = dest.with_suffix(".tmp")
     n = 0
-    with src.open(newline="", encoding="utf-8") as fin, tmp.open(
-        "w", newline="", encoding="utf-8"
-    ) as fout:
+    with (
+        src.open(newline="", encoding="utf-8") as fin,
+        tmp.open("w", newline="", encoding="utf-8") as fout,
+    ):
         reader = csv.DictReader(fin)
         writer = csv.DictWriter(
             fout, fieldnames=["patient_pseudo", "birth_year", "sex", "region_code"]
@@ -53,9 +57,10 @@ def copy_sejours(source_date: date, src: Path) -> tuple[Path, int]:
     dest.parent.mkdir(parents=True, exist_ok=True)
     tmp = dest.with_suffix(".tmp")
     n = 0
-    with src.open(newline="", encoding="utf-8") as fin, tmp.open(
-        "w", newline="", encoding="utf-8"
-    ) as fout:
+    with (
+        src.open(newline="", encoding="utf-8") as fin,
+        tmp.open("w", newline="", encoding="utf-8") as fout,
+    ):
         reader = csv.DictReader(fin)
         writer = csv.DictWriter(
             fout,
@@ -83,6 +88,32 @@ def copy_sejours(source_date: date, src: Path) -> tuple[Path, int]:
                 }
             )
             n += 1
+    tmp.replace(dest)
+    return dest, n
+
+
+def copy_diagnostics(source_date: date, src: Path) -> tuple[Path, int]:
+    """Transforme JSON source (array imbriqué) → NDJSON (plat)."""
+    dest = lake_path("diagnostics", source_date, "diagnostics.ndjson")
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dest.with_suffix(".tmp")
+    n = 0
+    with (
+        src.open("r", encoding="utf-8") as fin,
+        tmp.open("w", encoding="utf-8") as fout,
+    ):
+        data = json.load(fin)  # Array d'objets {stay_id, diagnostics: [...]}
+        for record in data:
+            stay_id = record.get("stay_id")
+            diagnostics_list = record.get("diagnostics", [])
+            for diag in diagnostics_list:
+                out_row = {
+                    "stay_id": stay_id,
+                    "code_cim10": diag.get("code_cim10"),
+                    "type": diag.get("type"),
+                }
+                fout.write(json.dumps(out_row, ensure_ascii=False) + "\n")
+                n += 1
     tmp.replace(dest)
     return dest, n
 

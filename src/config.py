@@ -24,3 +24,10 @@ LOG_DIR = _path("LOG_DIR", ROOT / "logs")
 
 # Sel de hash : même IPP → même pseudo tous les jours (jointures).
 EDS_PSEUDO_SALT = os.getenv("EDS_PSEUDO_SALT", "chu-eds-dev-salt-changez-moi")
+
+# ClickHouse
+CLICKHOUSE_HOST = os.getenv("CLICKHOUSE_HOST", "localhost")
+CLICKHOUSE_PORT = int(os.getenv("CLICKHOUSE_PORT", "9000"))
+CLICKHOUSE_USER = os.getenv("CLICKHOUSE_USER", "default")
+CLICKHOUSE_PASSWORD = os.getenv("CLICKHOUSE_PASSWORD", "")
+CLICKHOUSE_DATABASE = os.getenv("CLICKHOUSE_DATABASE", "default")

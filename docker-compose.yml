@@ -1,0 +1,25 @@
+services:
+  clickhouse:
+    image: clickhouse/clickhouse-server:latest
+    container_name: eds-clickhouse
+    ports:
+      - "8123:8123" # HTTP
+      - "9000:9000" # Native
+    environment:
+      CLICKHOUSE_DB: default
+      CLICKHOUSE_USER: default
+      CLICKHOUSE_PASSWORD: ""
+    volumes:
+      - clickhouse-data:/var/lib/clickhouse
+      - ./sql:/docker-entrypoint-initdb.d:ro
+      - ./users.xml:/etc/clickhouse-server/users.d/default-user.xml
+      - ./lake:/var/lib/clickhouse/user_files/lake:ro
+    networks:
+      - eds-network
+
+volumes:
+  clickhouse-data:
+
+networks:
+  eds-network:
+    driver: bridge
