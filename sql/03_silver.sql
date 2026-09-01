@@ -72,18 +72,21 @@ CREATE TABLE eds_silver.fact_sejour
 ENGINE = MergeTree
 ORDER BY stay_id;
 
--- Fait 2 — grain : 1 ligne = 1 code CIM-10 posé sur un séjour (principal ou associé).
+-- Fait 2 — grain : 1 ligne = 1 code CIM-10.
+-- Autosuffisant : patient_pseudo est recopié à l'ETL depuis bronze.sejours
+-- (pas une FK vers fact_sejour). stay_id = dimension dégénérée.
 CREATE TABLE eds_silver.fact_diagnostic
 (
-    stay_id        String,
-    code_cim10     LowCardinality(String),
-    type           LowCardinality(String),
-    source_date    Date
+    stay_id          String,
+    patient_pseudo   String,
+    code_cim10       LowCardinality(String),
+    type             LowCardinality(String),
+    source_date      Date
 )
 ENGINE = MergeTree
 ORDER BY (stay_id, type, code_cim10);
 
--- Fait 3 — grain : 1 ligne = 1 relevé de constantes au chevet.
+-- Fait 3 — grain : 1 ligne = 1 relevé. Construit uniquement depuis bronze.monitoring.
 CREATE TABLE eds_silver.fact_monitoring
 (
     stay_id        String,
@@ -172,25 +175,34 @@ FROM eds_bronze.sejours
 WHERE discharge_ts IS NULL
    OR discharge_ts >= admission_ts;
 
--- Fait diagnostic : uniquement les séjours encore en silver (intégrité logique).
+-- Fait diagnostic : bronze.diagnostics ⋈ bronze.sejours (ETL), jamais fact_sejour.
 INSERT INTO eds_silver.fact_diagnostic
 SELECT
     d.stay_id,
+    s.patient_pseudo,
     d.code_cim10,
     d.type,
     d._source_date AS source_date
 FROM eds_bronze.diagnostics AS d
-INNER JOIN eds_silver.fact_sejour AS s ON d.stay_id = s.stay_id;
+INNER JOIN eds_bronze.sejours AS s ON d.stay_id = s.stay_id
+WHERE s.discharge_ts IS NULL
+   OR s.discharge_ts >= s.admission_ts;
 
 INSERT INTO eds_silver.rejets (domaine, regle, stay_id, source_date, detail)
 SELECT
     'diagnostics',
-    'sejour_absent_silver',
+    'sejour_invalide',
     d.stay_id,
     d._source_date,
     concat('code=', d.code_cim10, ' type=', d.type)
 FROM eds_bronze.diagnostics AS d
-LEFT ANTI JOIN eds_silver.fact_sejour AS s ON d.stay_id = s.stay_id;
+LEFT ANTI JOIN
+(
+    SELECT stay_id
+    FROM eds_bronze.sejours
+    WHERE discharge_ts IS NULL
+       OR discharge_ts >= admission_ts
+) AS v ON d.stay_id = v.stay_id;
 
 -- Fait monitoring
 INSERT INTO eds_silver.rejets (domaine, regle, stay_id, source_date, detail)

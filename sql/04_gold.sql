@@ -111,14 +111,13 @@ FROM
     SELECT
         d.code_cim10 AS code_cim10,
         any(c.libelle) AS libelle,
-        uniqExact(s.patient_pseudo) AS nb_patients,
+        uniqExact(d.patient_pseudo) AS nb_patients,
         count() AS nb_sejours
     FROM eds_silver.fact_diagnostic AS d
-    INNER JOIN eds_silver.fact_sejour AS s ON d.stay_id = s.stay_id
     LEFT JOIN eds_silver.dim_cim10 AS c ON d.code_cim10 = c.code_cim10
     WHERE d.type = 'principal'
     GROUP BY d.code_cim10
-    HAVING uniqExact(s.patient_pseudo) >= 5
+    HAVING uniqExact(d.patient_pseudo) >= 5
 );
 
 -- Description de cohorte : distribution par âge et sexe (patients ayant au moins un séjour).

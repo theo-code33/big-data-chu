@@ -74,7 +74,7 @@ Filestorage CHU (lecture seule)
 |---|---|---|
 | **Lake** | Copie de travail. Pour les patients / séjours : déjà pseudonymisée | Le CHU reste intouchable. Le bonus RGPD exige que l’identité **n’entre pas** dans notre zone |
 | **Bronze** | Fichiers → tables typées (`Date`, `DateTime`, types numériques) + `_source_date` / `_ingested_at` | On peut **rejouer** silver/gold sans relire les fichiers. On sait d’où vient chaque ligne |
-| **Silver** | Qualité + **3 faits** (séjour, diagnostic, monitoring) et dimensions | Vérité métier. Les rejets sont tracés, pas silencieux. Détail : [`docs/modele-silver.md`](docs/modele-silver.md) |
+| **Silver** | Qualité + **3 faits autonomes** (séjour, diagnostic, monitoring) + dimensions | Un fait ne joint **jamais** un autre fait, seulement des dimensions. [`docs/modele-silver.md`](docs/modele-silver.md) |
 | **Gold** | Indicateurs **déjà agrégés**, un schéma par usage | Le dashboard ne recalcule pas la DMS. Le cloisonnement se fait ici (GRANT), pas dans l’UI seule |
 
 Pourquoi **ne pas** tout nettoyer en bronze ? Parce qu’une règle métier (bornes FC, séjour inversé) peut évoluer. Bronze reste proche du fichier ; on reconstruit silver sans ré-ingérer.
