@@ -106,7 +106,7 @@ Ce qu’on n’utilise **pas** (ce n’est pas un oubli) :
 | **Pseudonymisation à l’entrée** | `patient_id` → SHA-256(`sel` + id), **stable** (les jointures séjours/patients restent possibles). Sel dans `.env`, jamais dans git |
 | **Minimisation** | `nir`, `nom`, `prenom` **supprimés** dès la copie. Date de naissance **généralisée à l’année** (`birth_year`). Le lake ne contient plus ces colonnes |
 | **Cloisonnement** | 2 bases gold, 2 users ClickHouse (`pilotage` / `recherche`), 2 collections Metabase, 2 comptes applicatifs. Un `SELECT` SQL hors périmètre est refusé par ClickHouse, pas seulement caché dans l’UI |
-| **Petits effectifs** | En recherche, une cohorte avec **&lt; 5 patients** n’est pas exposée (`HAVING nb_patients >= 5`) |
+| **Petits effectifs** | En recherche, on ne diffuse pas une cohorte si `nb_patients < 5` |
 | **Traçabilité** | `_source_date`, `_ingested_at`, table `eds_ops.fichiers_traites`, `eds_ops.runs`, table `eds_silver.rejets` (règle, séjour, jour source) |
 
 Le hash est déterministe **avec sel** : sans le sel, on ne recompose pas l’IPP. Avec le même sel, le même patient a le même pseudo tous les jours.

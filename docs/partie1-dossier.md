@@ -126,7 +126,7 @@ Pas d’autre indicateur de pilotage (pas de vue « activité / décès / rejets
 
 ### Recherche
 
-**Prévalence** : `uniqExact(patient_pseudo)` par diagnostic **principal** (`fact_diagnostic` ⋈ `dim_cim10` uniquement — le patient est **déjà sur le fait**), `HAVING >= 5`.
+**Prévalence** : `uniqExact(patient_pseudo)` par diagnostic **principal** (`fact_diagnostic` ⋈ `dim_cim10`). On ne diffuse pas si `nb_patients < 5`.
 
 **Âge × sexe** : patients ayant au moins un séjour, tranches 0–17 / 18–39 / 40–64 / 65+, même seuil de 5.
 

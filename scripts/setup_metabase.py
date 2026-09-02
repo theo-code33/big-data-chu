@@ -425,7 +425,7 @@ def main() -> None:
     cards_r = []
     cards_r.append(
         mb.upsert_card(
-            "Prévalence par pathologie (n ≥ 5)",
+            "Prévalence par pathologie (masqué si n < 5)",
             db_r,
             col_r,
             "SELECT libelle, code_cim10, nb_patients, nb_sejours FROM eds_gold_recherche.prevalence_pathologie ORDER BY nb_patients DESC",
@@ -435,7 +435,7 @@ def main() -> None:
     )
     cards_r.append(
         mb.upsert_card(
-            "Cohorte : âge × sexe (n ≥ 5)",
+            "Cohorte : âge × sexe (masqué si n < 5)",
             db_r,
             col_r,
             "SELECT tranche_age, sex, nb_patients FROM eds_gold_recherche.cohorte_age_sexe ORDER BY tranche_age, sex",

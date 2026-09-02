@@ -117,8 +117,9 @@ FROM
     LEFT JOIN eds_silver.dim_cim10 AS c ON d.code_cim10 = c.code_cim10
     WHERE d.type = 'principal'
     GROUP BY d.code_cim10
-    HAVING uniqExact(d.patient_pseudo) >= 5
-);
+) AS agg
+-- RGPD : on ne diffuse pas si l'effectif est strictement inférieur à 5.
+WHERE NOT (nb_patients < 5);
 
 -- Description de cohorte : distribution par âge et sexe (patients ayant au moins un séjour).
 CREATE TABLE eds_gold_recherche.cohorte_age_sexe
@@ -144,8 +145,9 @@ FROM
     INNER JOIN eds_silver.dim_patient AS p ON s.patient_pseudo = p.patient_pseudo
     WHERE p.sex IN ('M', 'F')
     GROUP BY tranche_age, sex
-    HAVING uniqExact(p.patient_pseudo) >= 5
-);
+) AS agg
+-- RGPD : on ne diffuse pas si l'effectif est strictement inférieur à 5.
+WHERE NOT (nb_patients < 5);
 
 GRANT SELECT ON eds_gold_pilotage.* TO pilotage;
 GRANT SELECT ON eds_gold_recherche.* TO recherche;
