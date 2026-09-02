@@ -367,7 +367,7 @@ def main() -> None:
             "DMS par service (jours)",
             db_p,
             col_p,
-            "SELECT service_label, dms_jours, nb_sejours_sortis FROM eds_gold_pilotage.dms_par_service ORDER BY dms_jours DESC",
+            "SELECT service_label, dms_jours, dms_heures, nb_sejours FROM eds_gold_pilotage.dms_par_service ORDER BY dms_jours DESC",
             "bar",
             viz_bar("service_label", "dms_jours"),
         )
@@ -377,7 +377,7 @@ def main() -> None:
             "Passages urgences par jour",
             db_p,
             col_p,
-            "SELECT jour, nb_passages FROM eds_gold_pilotage.passages_urgences_jour ORDER BY jour",
+            "SELECT jour, nb_passages, nb_encore_presents, duree_moy_heures FROM eds_gold_pilotage.passages_urgences_jour ORDER BY jour",
             "line",
             viz_line("jour", "nb_passages"),
         )
@@ -387,9 +387,9 @@ def main() -> None:
             "Taux de réadmission à 30 jours",
             db_p,
             col_p,
-            "SELECT service_label, taux_pct, nb_sorties, nb_readmissions FROM eds_gold_pilotage.readmission_30j ORDER BY taux_pct DESC",
-            "bar",
-            viz_bar("service_label", "taux_pct"),
+            "SELECT nb_readmissions_30j, nb_sejours, taux_readmission_30j_pct FROM eds_gold_pilotage.readmission_30j",
+            "table",
+            {},
         )
     )
     cards_p.append(
@@ -397,7 +397,7 @@ def main() -> None:
             "Alertes monitoring par jour",
             db_p,
             col_p,
-            "SELECT jour, nb_releves, nb_alertes FROM eds_gold_pilotage.alertes_monitoring_jour ORDER BY jour",
+            "SELECT jour, nb_releves, nb_alertes, taux_alertes_pct FROM eds_gold_pilotage.alertes_monitoring_jour ORDER BY jour",
             "line",
             viz_line("jour", "nb_alertes"),
         )
@@ -418,6 +418,9 @@ def main() -> None:
         "Activité par service",
         "Rejets qualité (traçabilité)",
         "Cohorte par pathologie, âge et sexe (n ≥ 5)",
+        "Cohorte : âge × sexe (masqué si n < 5)",
+        "Cohorte : âge × sexe (n ≥ 5)",
+        "Prévalence par pathologie (n ≥ 5)",
     ):
         mb.archive_card(obsolete, col_p)
         mb.archive_card(obsolete, col_r)
@@ -428,19 +431,19 @@ def main() -> None:
             "Prévalence par pathologie (masqué si n < 5)",
             db_r,
             col_r,
-            "SELECT libelle, code_cim10, nb_patients, nb_sejours FROM eds_gold_recherche.prevalence_pathologie ORDER BY nb_patients DESC",
+            "SELECT libelle, code_cim10, nb_patients_diffusable FROM eds_gold_recherche.prevalence_pathologie WHERE nb_patients_diffusable IS NOT NULL ORDER BY nb_patients_diffusable DESC",
             "bar",
-            viz_bar("libelle", "nb_patients"),
+            viz_bar("libelle", "nb_patients_diffusable"),
         )
     )
     cards_r.append(
         mb.upsert_card(
-            "Cohorte : âge × sexe (masqué si n < 5)",
+            "Cohorte : pathologie × âge × sexe (masqué si n < 5)",
             db_r,
             col_r,
-            "SELECT tranche_age, sex, nb_patients FROM eds_gold_recherche.cohorte_age_sexe ORDER BY tranche_age, sex",
-            "bar",
-            {"graph.dimensions": ["tranche_age", "sex"], "graph.metrics": ["nb_patients"]},
+            "SELECT code_cim10, tranche_age, sex, nb_patients_diffusable FROM eds_gold_recherche.cohorte_age_sexe WHERE nb_patients_diffusable IS NOT NULL ORDER BY code_cim10, tranche_age, sex",
+            "table",
+            {},
         )
     )
 

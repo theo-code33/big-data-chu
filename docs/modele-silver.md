@@ -8,10 +8,10 @@ Chaque fait a son grain et **toutes les clés de dimensions** dont ses KPI ont b
 
 | Table | Type | Grain | Suffisant pour |
 |---|---|---|---|
-| `fact_sejour` | Fait | 1 passage | DMS, urgences / jour, réadmission 30 j, pyramide âge × sexe |
-| `fact_diagnostic` | Fait | 1 code CIM-10 posé | Prévalence par pathologie |
+| `fact_sejour` | Fait | 1 passage | DMS, urgences / jour, réadmission 30 j |
+| `fact_diagnostic` | Fait | 1 code CIM-10 posé | Prévalence, cohorte âge × sexe |
 | `fact_monitoring` | Fait | 1 relevé de constantes | Relevés en alerte / jour |
-| `dim_patient` | Dimension | 1 patient | âge, sexe (join depuis `fact_sejour`) |
+| `dim_patient` | Dimension | 1 patient | âge, sexe (join depuis `fact_diagnostic`) |
 | `dim_service` | Dimension | 1 service | libellé (join depuis `fact_sejour`) |
 | `dim_cim10` | Dimension | 1 code | libellé (join depuis `fact_diagnostic`) |
 | `rejets` | Quarantaine | 1 ligne écartée | aucun KPI |
@@ -76,10 +76,10 @@ Les trois faits **ne se touchent pas**. `patient_pseudo` est recopié **à l’E
 |---|---|---|
 | DMS par service | `fact_sejour` | `dim_service` |
 | Passages urgences / jour | `fact_sejour` | — |
-| Réadmission 30 j | `fact_sejour` (auto-jointure du **même** fait) | `dim_service` |
+| Réadmission 30 j | `fact_sejour` (auto-jointure du **même** fait) | — |
 | Relevés en alerte / jour | `fact_monitoring` | — |
 | Prévalence par pathologie | `fact_diagnostic` | `dim_cim10` |
-| Distribution âge × sexe | `fact_sejour` | `dim_patient` |
+| Distribution âge × sexe | `fact_diagnostic` | `dim_patient` |
 
 L’auto-jointure de `fact_sejour` pour la réadmission n’est pas un lien entre deux faits différents : on compare deux **lignes du même grain**.
 
@@ -93,13 +93,13 @@ L’auto-jointure de `fact_sejour` pour la réadmission n’est pas un lien entr
 
 ## 4. Construction (depuis bronze, indépendamment)
 
-Chaque fait se charge depuis **ses** fichiers bronze. La règle « séjour dates inversées » est **recopiée** côté diagnostic (filtre sur `bronze.sejours`), on n’attend pas que `fact_sejour` existe.
+Chaque fait se charge depuis **ses** fichiers bronze. Un séjour aux dates inversées est absent de `fact_sejour` ; son **codage** reste dans `fact_diagnostic` (faits indépendants, la prévalence compte tout code posé).
 
 | Contrat | Effet |
 |---|---|
 | Dump patients dédupliqué | `dim_patient` |
 | Sortie vide | `fact_sejour.est_en_cours = 1` |
-| Sortie avant entrée | absent de `fact_sejour` **et** de `fact_diagnostic` (même règle, deux pipelines) |
+| Sortie avant entrée | absent de `fact_sejour` ; le diagnostic du séjour **reste** dans `fact_diagnostic` |
 | Constante hors plage | absent de `fact_monitoring` |
 
 ## 5. Limites

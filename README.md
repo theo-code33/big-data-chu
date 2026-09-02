@@ -97,7 +97,7 @@ Le sujet propose une stack qui tient sur un laptop. On la suit, et on justifie.
 Ce qu’on n’utilise **pas** (ce n’est pas un oubli) :
 
 - **pandas / Spark** pour la transformation métier — anti-pattern ici ; le volume pédagogique est le monitoring, conçu pour rester dans le moteur.
-- **Airflow / Prefect** — disproportionné pour 3 jours de fichiers et un laptop. Un scheduler Python + table de watermark fait l’incrémental et la reprise. En production on remplacerait ce scheduler par Airflow ; le SQL médaillon ne changerait pas.
+- **Airflow / Prefect** — disproportionné pour un mois de fichiers et un laptop. Un scheduler Python + table de watermark fait l’incrémental et la reprise. En production on remplacerait ce scheduler par Airflow ; le SQL médaillon ne changerait pas.
 
 ## 6. RGPD — décisions de conception
 
@@ -106,7 +106,7 @@ Ce qu’on n’utilise **pas** (ce n’est pas un oubli) :
 | **Pseudonymisation à l’entrée** | `patient_id` → SHA-256(`sel` + id), **stable** (les jointures séjours/patients restent possibles). Sel dans `.env`, jamais dans git |
 | **Minimisation** | `nir`, `nom`, `prenom` **supprimés** dès la copie. Date de naissance **généralisée à l’année** (`birth_year`). Le lake ne contient plus ces colonnes |
 | **Cloisonnement** | 2 bases gold, 2 users ClickHouse (`pilotage` / `recherche`), 2 collections Metabase, 2 comptes applicatifs. Un `SELECT` SQL hors périmètre est refusé par ClickHouse, pas seulement caché dans l’UI |
-| **Petits effectifs** | En recherche, on ne diffuse pas une cohorte si `nb_patients < 5` |
+| **Petits effectifs** | En recherche, `nb_patients_diffusable` est NULL si `nb_patients < 5` (la ligne reste, le chiffre n’est pas diffusé) |
 | **Traçabilité** | `_source_date`, `_ingested_at`, table `eds_ops.fichiers_traites`, `eds_ops.runs`, table `eds_silver.rejets` (règle, séjour, jour source) |
 
 Le hash est déterministe **avec sel** : sans le sel, on ne recompose pas l’IPP. Avec le même sel, le même patient a le même pseudo tous les jours.
@@ -130,17 +130,17 @@ On n’est pas médecins. Le sujet demande de **détecter**, **écarter**, **tra
 
 ## 8. Indicateurs (gold) — strictement le §4 du sujet
 
-**Pilotage** (séjour sorti uniquement pour la DMS et la réadmission) :
+**Pilotage** :
 
-- DMS par service (`fact_sejour` ⋈ `dim_service`)
-- Passages aux urgences par jour = `fact_sejour` avec `service_code = 'URGENCES'` (activité du **service**, pas le mode d’entrée `urgence`)
-- Taux de réadmission à 30 jours : séjour sorti suivi d’une **nouvelle admission du même patient** dans les 30 jours
-- Relevés monitoring en alerte / jour (`fact_monitoring`) — bornes d’alerte plus strictes que le rejet qualité (ex. SpO2 &lt; 90 %)
+- DMS par service (`fact_sejour` ⋈ `dim_service`) : séjours sortis, `dms_jours` et `dms_heures`
+- Passages aux urgences par jour = `service_code = 'URGENCES'` : `nb_passages`, `nb_encore_presents` (sortie encore vide), `duree_moy_heures`
+- Taux de réadmission à 30 jours **global** : part des séjours qui sont une nouvelle admission du même patient dans les 30 jours après une sortie
+- Relevés monitoring en alerte / jour — seuils **d’alerte** (plus stricts que le rejet qualité) : SpO2 &lt; 92, FC &lt; 50 ou &gt; 100, T° &gt; 38,5
 
 **Recherche** :
 
-- Prévalence / taille de cohorte par diagnostic **principal** (`fact_diagnostic`), masquée si n &lt; 5
-- Distribution par âge et sexe (`fact_sejour` ⋈ `dim_patient`), même règle n &lt; 5
+- Prévalence / taille de cohorte par **tout** code CIM-10 posé : `nb_patients` et `nb_patients_diffusable` (NULL si n &lt; 5)
+- Description de cohorte : diagnostic **principal** × tranche d’âge 10 ans × sexe, même masque n &lt; 5
 
 Pas d’autre KPI. SQL : `sql/04_gold.sql`.
 
@@ -153,7 +153,7 @@ On n’ingère pas deux fois le même fichier.
 3. Statut `ok` → on passe. Statut `erreur` → on peut relancer (`--retry-errors`).
 4. Bronze s’**append** par jour. Silver et gold sont **reconstruits** depuis bronze (volume faible, idempotent, règles qualité toujours à jour).
 
-C’est volontaire : l’incrémental « lourd » est à l’ingestion (ne pas relire 6 mois de Parquet). Recalculer les KPI sur 3 jours (ou même quelques mois) dans ClickHouse est cheap.
+C’est volontaire : l’incrémental « lourd » est à l’ingestion (ne pas relire 6 mois de Parquet). Recalculer les KPI sur un mois dans ClickHouse est cheap.
 
 ## 10. Structure du dépôt
 
@@ -203,9 +203,9 @@ Mots de passe : `.env` / `.env.example`. Pour démontrer le cloisonnement, ouvri
 
 ## 12. Limites assumées
 
-- **3 jours** de dépôt : les taux (réadmission, DMS) sont pédagogiques, pas une statistique hospitalière annuelle.
-- **Âge approximatif** : année de naissance seulement (minimisation) → `année_courante - birth_year`.
-- **Données d’exercice** (identités fictives, CIM-10 limité à 10 codes).
+- **Un mois** de dépôt (1er–28 août 2026) : la réadmission à 30 jours reste bornée par la fin de fenêtre.
+- **Âge approximatif** : année de naissance seulement (minimisation) → `2026 - birth_year`, tranches de 10 ans.
+- **Données d’exercice** (identités fictives, 13 codes CIM-10 dont deux cohortes &lt; 5).
 - Pas de cluster, pas d’Airflow : stack laptop, justifiée plus haut.
 - Le sel de hash, s’il change, **casse** l’historique des jointures — ne pas le rotator sans règle de migration.
 

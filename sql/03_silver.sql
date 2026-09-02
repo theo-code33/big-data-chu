@@ -118,7 +118,7 @@ SELECT
     birth_year,
     upper(trim(sex)) AS sex,
     region_code,
-    toInt16(toYear(today()) - birth_year) AS age_approx,
+    toInt16(2026 - birth_year) AS age_approx,
     _source_date AS source_date
 FROM
 (
@@ -176,6 +176,8 @@ WHERE discharge_ts IS NULL
    OR discharge_ts >= admission_ts;
 
 -- Fait diagnostic : bronze.diagnostics ⋈ bronze.sejours (ETL), jamais fact_sejour.
+-- On garde le code même si le séjour a des dates inversées : la prévalence compte
+-- tout diagnostic posé (le séjour est écarté de fact_sejour, pas le codage).
 INSERT INTO eds_silver.fact_diagnostic
 SELECT
     d.stay_id,
@@ -184,25 +186,7 @@ SELECT
     d.type,
     d._source_date AS source_date
 FROM eds_bronze.diagnostics AS d
-INNER JOIN eds_bronze.sejours AS s ON d.stay_id = s.stay_id
-WHERE s.discharge_ts IS NULL
-   OR s.discharge_ts >= s.admission_ts;
-
-INSERT INTO eds_silver.rejets (domaine, regle, stay_id, source_date, detail)
-SELECT
-    'diagnostics',
-    'sejour_invalide',
-    d.stay_id,
-    d._source_date,
-    concat('code=', d.code_cim10, ' type=', d.type)
-FROM eds_bronze.diagnostics AS d
-LEFT ANTI JOIN
-(
-    SELECT stay_id
-    FROM eds_bronze.sejours
-    WHERE discharge_ts IS NULL
-       OR discharge_ts >= admission_ts
-) AS v ON d.stay_id = v.stay_id;
+INNER JOIN eds_bronze.sejours AS s ON d.stay_id = s.stay_id;
 
 -- Fait monitoring
 INSERT INTO eds_silver.rejets (domaine, regle, stay_id, source_date, detail)

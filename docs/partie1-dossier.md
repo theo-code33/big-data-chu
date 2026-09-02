@@ -15,17 +15,17 @@ Ce que l’hôpital n’a pas demandé, et que nous ne livrons pas : un DPI, un 
 
 ## 2. Sources
 
-Accès en **lecture seule** au filestorage CHU (`source-filestorage/`). Trois jours : 26, 27 et 28 août 2026.
+Accès en **lecture seule** au filestorage CHU (`source-filestorage/`). Un mois : 1er–28 août 2026 (patients : 3 dumps les 26–28).
 
 | Source | Volume observé | Caractère |
 |---|---|---|
-| `patients.csv` | 4 800 / 5 400 / 6 000 lignes | Dump **complet** cumulatif (+600 patients/jour). Identité en clair |
-| `sejours.csv` | 5 000 lignes / jour, `stay_id` unique | Incrémental. ~44–50 dates inversées / jour, ~390–407 séjours en cours |
-| `diagnostics.json` | 5 000 séjours, ~12 400 codes | 1 diagnostic principal obligatoire + associés |
-| `monitoring.parquet` | 3 fichiers | Constantes ; ingéré **nativement** par ClickHouse |
-| `services.csv`, `cim10.csv` | 8 services, 10 codes CIM-10 | Référentiels **J1 seulement** |
+| `patients.csv` | 3 × 6 000 lignes | Dump **complet** (snapshots). Identité en clair |
+| `sejours.csv` | 6 797 lignes au total | Incrémental quotidien |
+| `diagnostics.json` | un fichier / jour | 1 diagnostic principal + associés |
+| `monitoring.parquet` | 28 fichiers | Constantes ; ingéré **nativement** par ClickHouse |
+| `services.csv`, `cim10.csv` | 8 services, 13 codes CIM-10 | Référentiels **J1 seulement** |
 
-Les 10 codes CIM-10 du référentiel sont exactement ceux présents dans les diagnostics : pas de code orphelin attendu.
+Les 13 codes CIM-10 du référentiel sont ceux des diagnostics (dont E84, Q90, G12 : petits effectifs).
 
 Le dump patients ne change pas les attributs d’un IPP déjà vu (contrôle effectué J1 vs J3). On déduplique quand même : c’est la règle demandée, et elle restera juste le jour où un reverse administratif corrigera une date de naissance.
 
@@ -72,11 +72,11 @@ Tables typées, partitionnées par `_source_date`. Ingestion **incrémentale** :
 | `discharge_ts < admission_ts` | écarté | `discharge_avant_admission` |
 | `discharge_ts` NULL | **conservé**, `est_en_cours = 1` | — |
 | FC ∉ [20,250], SpO2 ∉ [50,100], temp ∉ [30,45] | écarté | `valeur_hors_plage` |
-| Diagnostic d’un séjour aux dates inversées | écarté | `sejour_invalide` |
+| Diagnostic d’un séjour aux dates inversées | **conservé** dans `fact_diagnostic` (le séjour est écarté de `fact_sejour`) | — |
 
 On **n’impute pas** une date de sortie, on ne « corrige » pas une FC à 15 bpm. On n’est pas médecins.
 
-`discharge_mode` vide sur un séjour **sorti** (~2 000 lignes sur 3 jours) : hors liste imposée, **conservé**. Signalé ici comme dette qualité (export incomplet), pas comme rejet silencieux.
+`discharge_mode` vide sur un séjour **sorti** : hors liste imposée, **conservé**. Signalé ici comme dette qualité (export incomplet), pas comme rejet silencieux.
 
 Enrichissements : `duree_heures` et `est_en_cours` sur le **fait séjour** ; `age_approx` sur **`dim_patient`**. Les libellés restent dans `dim_service` / `dim_cim10` (pas recopiés dans les faits).
 
@@ -100,25 +100,25 @@ Toutes les requêtes sont dans [`sql/04_gold.sql`](../sql/04_gold.sql). Un chiff
 
 Un séjour en cours n’a pas de durée : l’inclure tirerait la DMS vers le bas ou imposerait une imputation. On l’exclut.
 
-**Passages urgences / jour** : `count` des séjours avec `service_code = 'URGENCES'`, groupé par `toDate(admission_ts)`.
+**Passages urgences / jour** : `count` des séjours avec `service_code = 'URGENCES'`, groupé par `toDate(admission_ts)`, plus `nb_encore_presents` (sortie encore vide à la fin de la fenêtre) et `duree_moy_heures` (moyenne sur les séjours clos — `avg` ignore les NULL).
 
 Ce n’est **pas** `admission_mode = 'urgence'`. Ce mode existe aussi en cardiologie (entrée non programmée dans un autre service). L’activité *des* urgences, au sens du besoin, est celle du **service** URGENCES.
 
-**Réadmission 30 jours** : parmi les séjours sortis, part de ceux pour lesquels il existe un **autre** séjour du même `patient_pseudo` avec
+**Réadmission 30 jours** : un séjour est une réadmission s’il existe un **autre** séjour du même `patient_pseudo` **sorti** tel que
 
 \[
-t_{\mathrm{entrée}}^{\mathrm{suivant}} \in \left( t_{\mathrm{sortie}} \;;\; t_{\mathrm{sortie}} + 30\,\mathrm{j} \right]
+t_{\mathrm{entrée}}^{\mathrm{actuel}} \in \left( t_{\mathrm{sortie}}^{\mathrm{précédent}} \;;\; t_{\mathrm{sortie}}^{\mathrm{précédent}} + 30\,\mathrm{j} \right]
 \]
 
-Calculé **par service** (service du séjour index, celui dont on mesure la sortie).
+Indicateur **global** (pas par service) : `nb_readmissions / nb_sejours_silver`.
 
 **Alertes monitoring / jour** — bornes **d’alerte**, plus strictes que le rejet qualité :
 
 | Signal | Rejet qualité (silver) | Alerte (gold) |
 |---|---|---|
-| FC (bpm) | hors 20–250 | &lt; 50 ou &gt; 120 |
-| SpO2 (%) | hors 50–100 | &lt; 90 |
-| Température (°C) | hors 30–45 | &lt; 36 ou &gt; 38,5 |
+| FC (bpm) | hors 20–250 | &lt; 50 ou &gt; 100 |
+| SpO2 (%) | hors 50–100 | &lt; 92 |
+| Température (°C) | hors 30–45 | &gt; 38,5 |
 
 Un relevé hors bornes qualité n’entre pas en `fact_monitoring` : il ne peut donc pas « alerter ». L’alerte mesure l’instabilité **parmi les constantes déjà crédibles**.
 
@@ -126,9 +126,9 @@ Pas d’autre indicateur de pilotage (pas de vue « activité / décès / rejets
 
 ### Recherche
 
-**Prévalence** : `uniqExact(patient_pseudo)` par diagnostic **principal** (`fact_diagnostic` ⋈ `dim_cim10`). On ne diffuse pas si `nb_patients < 5`.
+**Prévalence** : `uniqExact(patient_pseudo)` par code CIM-10 posé — principal **ou** associé (`fact_diagnostic` ⋈ `dim_cim10`). `nb_patients_diffusable` est NULL si `nb_patients < 5`.
 
-**Âge × sexe** : patients ayant au moins un séjour, tranches 0–17 / 18–39 / 40–64 / 65+, même seuil de 5.
+**Âge × sexe** : diagnostic **principal** uniquement, tranches de 10 ans (`0-9` … `90-99`), même masque.
 
 ## 6. Restitution et cloisonnement
 
@@ -150,26 +150,23 @@ SELECT * FROM eds_gold_recherche.prevalence_pathologie;
 
 Le cloisonnement n’est pas qu’un masque d’UI : le moteur refuse la requête.
 
-## 7 bis. Chiffres obtenus (26–28 août 2026)
+## 7 bis. Chiffres obtenus (1er–28 août 2026)
 
 Ces volumes servent à **justifier** les KPI, pas à en tirer une conclusion médicale.
 
 | Couche / contrôle | Effectif |
 |---|---|
-| Bronze patients (3 dumps) | 16 200 |
+| Bronze patients (3 dumps) | 18 000 |
 | Silver `dim_patient` (dédupliqués) | 6 000 |
-| Bronze séjours | 15 000 |
-| Silver `fact_sejour` | 14 864 |
-| Rejets `discharge_avant_admission` | 136 (44+50+42, conforme à l’exploration brute) |
-| Bronze monitoring | 66 677 |
-| Silver `fact_monitoring` | 65 308 |
-| Rejets constantes hors plage | 1 369 |
-| Diagnostics orphelins (séjour rejeté) | 340 |
-| DMS par service | ~6,0–6,2 jours (données d’exercice, peu de variance) |
-| Passages URGENCES | 617 / 639 / 581 sur J1–J3 |
-| Taux réadmission 30 j | 5,0–6,4 % selon le service (fenêtre de 3 jours : **sous-estimé**) |
-| Alertes monitoring | ~6,5 % des relevés silver |
-| Cohortes recherche | 10 pathologie, toutes n ≥ 1 250 — la règle n&lt;5 est en place mais non visible |
+| Bronze séjours | 6 797 |
+| Silver `fact_sejour` | 6 729 |
+| Rejets `discharge_avant_admission` | 68 |
+| Bronze monitoring | 41 778 |
+| Silver `fact_monitoring` | 40 920 |
+| Rejets constantes hors plage | 858 |
+| DMS (REA) | 9,05 j / 217,1 h (423 séjours clos) |
+| Réadmission 30 j | 780 / 6 729 = **11,59 %** |
+| Prévalence | N39 = 2 234 … G12 = 8 ; E84 = 4 et Q90 = 3 **masqués** (`< 5`) |
 
 Le lake patients ne contient que `patient_pseudo, birth_year, sex, region_code` (vérifié). Le user ClickHouse `pilotage` reçoit `ACCESS_DENIED` sur `eds_gold_recherche.*`.
 
@@ -177,9 +174,9 @@ Le lake patients ne contient que `patient_pseudo, birth_year, sex, region_code` 
 
 | Limite | Conséquence | Recommandation |
 |---|---|---|
-| 3 jours de dépôt | DMS et réadmission 30 j sont **sous-estimées / instables** (beaucoup de séjours sortent après J+3, hors fenêtre) | Recalculer sur 6–12 mois avant tout usage DIM |
-| Âge = année civile − année de naissance | Erreur jusqu’à 1 an | Si un usage clinique l’exige : mois de naissance, jamais le jour |
-| 10 codes CIM-10 | Toutes les cohortes dépassent 5 patients : la règle k=5 est **implémentée mais peu visible** | Tester avec un filtre ou un code rare |
+| Fenêtre d’un mois | La réadmission à 30 jours est calculable, mais les séjours encore ouverts en fin de mois n’ont pas de DMS | Recalculer sur 6–12 mois avant tout usage DIM |
+| Âge = 2026 − année de naissance | Erreur jusqu’à 1 an ; tranches de 10 ans | Si un usage clinique l’exige : mois de naissance, jamais le jour |
+| Petits effectifs | E84 (4) et Q90 (3) sont masqués ; G12 (8) est diffusé | La règle `n < 5` est visible sur ce jeu |
 | Données d’exercice | Identités et constantes synthétiques | Ne pas extraire de conclusion médicale |
 | Hash + sel unique | Rotation du sel = rupture d’historique | Prévoir une table de correspondance **hors lake**, HSM / coffre, en production |
 | Scheduler ≠ Airflow | Pas de DAG visuel, pas de SLA multi-équipe | Garder le SQL ; remplacer le process Python par Airflow plus tard |

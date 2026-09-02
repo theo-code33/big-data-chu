@@ -17,7 +17,7 @@ def _path(env_name: str, default: Path) -> Path:
     return p.resolve() if p.is_absolute() else (ROOT / p).resolve()
 
 
-SOURCE_FILESTORAGE = _path("SOURCE_FILESTORAGE", ROOT.parent / "source-filestorage")
+SOURCE_FILESTORAGE = _path("SOURCE_FILESTORAGE", ROOT / "source-filestorage")
 LAKE_ROOT = _path("LAKE_ROOT", ROOT / "lake")
 SQL_DIR = ROOT / "sql"
 LOG_DIR = _path("LOG_DIR", ROOT / "logs")

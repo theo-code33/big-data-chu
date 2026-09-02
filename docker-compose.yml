@@ -61,7 +61,7 @@ services:
       - ./lake:/app/lake
       - ./logs:/app/logs
       - ./sql:/app/sql:ro
-      - ../source-filestorage:/data/source:ro
+      - ./source-filestorage:/data/source:ro
     depends_on:
       clickhouse:
         condition: service_healthy
@@ -84,7 +84,7 @@ services:
       - ./lake:/app/lake
       - ./logs:/app/logs
       - ./sql:/app/sql:ro
-      - ../source-filestorage:/data/source:ro
+      - ./source-filestorage:/data/source:ro
     depends_on:
       clickhouse:
         condition: service_healthy
