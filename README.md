@@ -144,7 +144,28 @@ On n’est pas médecins. Le sujet demande de **détecter**, **écarter**, **tra
 
 Pas d’autre KPI. SQL : `sql/04_gold.sql`.
 
-## 9. Incrémental
+## 9. Restitution — pourquoi ces graphiques
+
+Un graphe n’est pas décoratif : il encode **une** question, pour **un** public. On n’empile pas les deux usages sur le même dashboard (cloisonnement), et on n’utilise pas de camembert : avec 8 services ou 13 codes, l’œil compare mal les parts, et un effectif masqué (`n < 5`) y disparaîtrait sans se voir.
+
+| Indicateur | Type | Pourquoi celui-là (et pas un autre) |
+|---|---|---|
+| DMS par service | **Barres** | 8 catégories à **comparer** (quelle réa vs quelles urgences). L’axe est la durée, triée décroissante : le DIM voit tout de suite où les lits tournent le plus lentement. Une courbe n’a pas de sens (pas de temps). Un camembert non plus (on compare des durées, pas des parts d’un total). |
+| Passages urgences / jour | **Courbe** | Série **temporelle** : l’ordre des jours compte, on cherche un pic, un creux, une tendance sur le mois. Des barres quotidiennes marcheraient, mais la ligne lit mieux le flux. |
+| Réadmission 30 j | **Tableau** (3 nombres) | C’est **un** taux global, pas une série. Une barre unique n’apporte rien. Le tableau montre ensemble numérateur, dénominateur et %, pour que le chiffre soit opposable (780 / 6 729 = 11,59 %). |
+| Alertes monitoring / jour | **Courbe** | Même logique que les urgences : surveillance **au fil des jours**. Une hausse brutale (fin de mois, petits effectifs) se voit ; un tableau de 30 lignes la noie. |
+| Prévalence par pathologie | **Barres** | Comparer les **tailles de cohortes**. Tri par `nb_patients_diffusable` ; les codes `n < 5` sont **absents** du graphe (pas une barre à zéro, qui laisserait deviner une pathologie rare). |
+| Cohorte pathologie × âge × sexe | **Tableau** | Trois dimensions d’un coup (code, tranche de 10 ans, sexe). Un graphique groupé serait illisible (~cent cellules). Le chercheur **lit une case**, y compris pour vérifier qu’une maille `n < 5` n’est pas diffusée. |
+
+Les requêtes Metabase lisent le gold déjà agrégé : le dashboard ne recalcule pas, il **montre**.
+
+**Tableau de bord pilotage :**
+![image](./public/tableau-pilotage.png)
+
+**Tableau de bord recherche :**
+![image](./public/tableau-recherche.png)
+
+## 10. Incrémental
 
 On n’ingère pas deux fois le même fichier.
 
@@ -155,7 +176,7 @@ On n’ingère pas deux fois le même fichier.
 
 C’est volontaire : l’incrémental « lourd » est à l’ingestion (ne pas relire 6 mois de Parquet). Recalculer les KPI sur un mois dans ClickHouse est cheap.
 
-## 10. Structure du dépôt
+## 11. Structure du dépôt
 
 ```text
 rendu/
@@ -172,7 +193,7 @@ rendu/
 └── logs/                  # gitignoré
 ```
 
-## 11. Lancement rapide
+## 12. Lancement rapide
 
 Prérequis : Docker, Python 3.11+ (optionnel en local).
 
@@ -201,7 +222,7 @@ python scripts/setup_metabase.py
 
 Mots de passe : `.env` / `.env.example`. Pour démontrer le cloisonnement, ouvrir Metabase avec `pilotage@chu.local` puis avec `recherche@chu.local` : chaque compte ne voit **que** sa collection. En SQL, `pilotage` ne peut pas lire `eds_gold_recherche`.
 
-## 12. Limites assumées
+## 13. Limites assumées
 
 - **Un mois** de dépôt (1er–28 août 2026) : la réadmission à 30 jours reste bornée par la fin de fenêtre.
 - **Âge approximatif** : année de naissance seulement (minimisation) → `2026 - birth_year`, tranches de 10 ans.
