@@ -72,3 +72,41 @@ CREATE TABLE IF NOT EXISTS eds_bronze.ref_cim10
 )
 ENGINE = ReplacingMergeTree(_ingested_at)
 ORDER BY code_cim10;
+
+-- Évolution 2026-08-29 : description plus fine des services (catégorie, lits, pôle).
+CREATE TABLE IF NOT EXISTS eds_bronze.ref_description_service
+(
+    service_code   String,
+    categorie      LowCardinality(String),
+    capacite_lits  Int32,
+    pole           LowCardinality(String),
+    _source_date   Date,
+    _ingested_at   DateTime
+)
+ENGINE = ReplacingMergeTree(_ingested_at)
+ORDER BY service_code;
+
+-- Évolution 2026-08-29 : nomenclature CCAM (actes / tarifs T2A).
+CREATE TABLE IF NOT EXISTS eds_bronze.ref_ccam
+(
+    code_ccam      String,
+    libelle        String,
+    tarif_euros    Int32,
+    _source_date   Date,
+    _ingested_at   DateTime
+)
+ENGINE = ReplacingMergeTree(_ingested_at)
+ORDER BY code_ccam;
+
+-- Évolution 2026-08-29 : nouveau flux d'actes (Parquet, lu par file()).
+CREATE TABLE IF NOT EXISTS eds_bronze.actes
+(
+    stay_id        String,
+    code_ccam      LowCardinality(String),
+    acte_ts        DateTime,
+    _source_date   Date,
+    _ingested_at   DateTime
+)
+ENGINE = MergeTree
+PARTITION BY _source_date
+ORDER BY (stay_id, acte_ts);

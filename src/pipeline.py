@@ -20,9 +20,8 @@ from src.ingest.copy_to_lake import (
 )
 from src.ingest.load_bronze import (
     LOADERS,
+    REF_LOADERS,
     drop_bronze_partition,
-    load_ref_cim10,
-    load_ref_services,
 )
 from src.logging_setup import setup_logging
 
@@ -179,6 +178,8 @@ def process_domain(
             dest, n_copy = copy_diagnostics(source_date, src)
         elif domaine == "monitoring":
             dest, n_copy = copy_as_is("monitoring", source_date, src)
+        elif domaine == "actes":
+            dest, n_copy = copy_as_is("actes", source_date, src)
         else:
             raise ValueError(domaine)
 
@@ -219,7 +220,7 @@ def _process_referentiels(client, source_date: date, src_dir: Path, force: bool,
         started = datetime.now()
         checksum = file_checksum(src)
         try:
-            loader = load_ref_services if name == "services" else load_ref_cim10
+            loader = REF_LOADERS[name]
             n = loader(client, source_date)
             record_file(client, src_str, "referentiels", source_date, checksum, n or n_copy, "ok", f"lake={dest}", started)
             logger.info("OK referentiel %s (%s lignes)", name, n or n_copy)
@@ -252,6 +253,7 @@ def run(
     dates: list[date] | None = None,
     force: bool = False,
     retry_errors: bool = False,
+    bronze_only: bool = False,
 ) -> None:
     run_id = uuid.uuid4().hex[:12]
     started_all = datetime.now()
@@ -267,10 +269,11 @@ def run(
 
     for source_date in todo:
         logger.info("=== Jour %s ===", source_date)
-        for domaine in ("referentiels", "patients", "sejours", "diagnostics", "monitoring"):
+        for domaine in ("referentiels", "patients", "sejours", "diagnostics", "monitoring", "actes"):
             process_domain(client, domaine, source_date, force, retry_errors)
 
-    rebuild_curated(client, run_id)
+    if not bronze_only:
+        rebuild_curated(client, run_id)
     record_run(client, run_id, "pipeline", "ok", f"dates={','.join(d.isoformat() for d in todo)}", started_all)
     logger.info("Run %s terminé", run_id)
 
@@ -281,6 +284,11 @@ def main() -> None:
     parser.add_argument("--date", type=str, help="Une date AAAA-MM-JJ")
     parser.add_argument("--force", action="store_true", help="Ré-ingérer même si déjà ok")
     parser.add_argument("--retry-errors", action="store_true", help="Rejouer les fichiers en erreur")
+    parser.add_argument(
+        "--bronze-only",
+        action="store_true",
+        help="Ingestion bronze sans reconstruire silver/gold",
+    )
     args = parser.parse_args()
 
     if args.date:
@@ -290,7 +298,7 @@ def main() -> None:
         if not args.all:
             # défaut pédagogique : tout traiter, en skippant l'already-ok
             dates = None
-    run(dates=dates, force=args.force, retry_errors=args.retry_errors)
+    run(dates=dates, force=args.force, retry_errors=args.retry_errors, bronze_only=args.bronze_only)
 
 
 if __name__ == "__main__":

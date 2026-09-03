@@ -80,6 +80,21 @@ def load_monitoring(client, source_date: date) -> int:
     return _count_bronze(client, "monitoring", source_date)
 
 
+def load_actes(client, source_date: date) -> int:
+    """Parquet lu par ClickHouse (file()) — pas de passage par Python/pandas."""
+    rel = f"lake/actes/{source_date.isoformat()}/actes.parquet"
+    client.command(
+        _file(
+            rel,
+            "Parquet",
+            "stay_id, code_ccam, acte_ts",
+            "eds_bronze.actes",
+            source_date,
+        )
+    )
+    return _count_bronze(client, "actes", source_date)
+
+
 def load_ref_services(client, source_date: date) -> int:
     rel = f"lake/referentiels/{source_date.isoformat()}/services.csv"
     client.command(
@@ -110,6 +125,47 @@ def load_ref_cim10(client, source_date: date) -> int:
     return int(result.first_row[0])
 
 
+def load_ref_description_service(client, source_date: date) -> int:
+    rel = f"lake/referentiels/{source_date.isoformat()}/description_service.csv"
+    schema = (
+        "service_code String, categorie String, capacite_lits Int32, pole String"
+    )
+    client.command(
+        f"""
+INSERT INTO eds_bronze.ref_description_service
+SELECT
+    service_code,
+    categorie,
+    capacite_lits,
+    pole,
+    toDate('{source_date.isoformat()}'),
+    now()
+FROM file('{rel}', CSVWithNames, '{schema}')
+""".strip()
+    )
+    result = client.query("SELECT count() FROM eds_bronze.ref_description_service")
+    return int(result.first_row[0])
+
+
+def load_ref_ccam(client, source_date: date) -> int:
+    rel = f"lake/referentiels/{source_date.isoformat()}/ccam.csv"
+    schema = "code_ccam String, libelle String, tarif_euros Int32"
+    client.command(
+        f"""
+INSERT INTO eds_bronze.ref_ccam
+SELECT
+    code_ccam,
+    libelle,
+    tarif_euros,
+    toDate('{source_date.isoformat()}'),
+    now()
+FROM file('{rel}', CSVWithNames, '{schema}')
+""".strip()
+    )
+    result = client.query("SELECT count() FROM eds_bronze.ref_ccam")
+    return int(result.first_row[0])
+
+
 def drop_bronze_partition(client, table: str, source_date: date) -> None:
     try:
         client.command(
@@ -133,4 +189,12 @@ LOADERS = {
     "sejours": ("sejours", load_sejours),
     "diagnostics": ("diagnostics", load_diagnostics),
     "monitoring": ("monitoring", load_monitoring),
+    "actes": ("actes", load_actes),
+}
+
+REF_LOADERS = {
+    "services": load_ref_services,
+    "cim10": load_ref_cim10,
+    "description_service": load_ref_description_service,
+    "ccam": load_ref_ccam,
 }

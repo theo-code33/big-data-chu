@@ -3,7 +3,7 @@ Copy src/ingest/copy_to_lake.py — filestorage → lake.
 
 Les patients et séjours sont réécrits sans identifiants directs.
 Le JSON diagnostics est aplati en NDJSON (format d'ingestion, pas de règle métier).
-Le monitoring Parquet est recopié tel quel (pas de PII, volume lu ensuite par ClickHouse).
+Le monitoring Parquet et le flux actes sont recopiés tels quels (pas de PII, volume lu ensuite par ClickHouse).
 """
 from __future__ import annotations
 
@@ -137,7 +137,7 @@ def copy_as_is(domain: str, source_date: date, src: Path) -> tuple[Path, int]:
 
 def copy_referentiels(source_date: date, src_dir: Path) -> list[tuple[str, Path, Path, int]]:
     out = []
-    for name in ("services.csv", "cim10.csv"):
+    for name in ("services.csv", "cim10.csv", "description_service.csv", "ccam.csv"):
         src = src_dir / name
         if src.exists():
             dest, _ = copy_as_is("referentiels", source_date, src)
@@ -150,7 +150,7 @@ def copy_referentiels(source_date: date, src_dir: Path) -> list[tuple[str, Path,
 def discover_dates() -> list[date]:
     """Dates pour lesquelles au moins un domaine métier a déposé un fichier."""
     found: set[date] = set()
-    for domain in ("patients", "sejours", "diagnostics", "monitoring"):
+    for domain in ("patients", "sejours", "diagnostics", "monitoring", "actes", "referentiels"):
         folder = SOURCE_FILESTORAGE / domain
         if not folder.is_dir():
             continue
@@ -167,6 +167,7 @@ def source_file(domain: str, source_date: date) -> Path | None:
         "sejours": "sejours.csv",
         "diagnostics": "diagnostics.json",
         "monitoring": "monitoring.parquet",
+        "actes": "actes.parquet",
     }
     if domain == "referentiels":
         return day if day.is_dir() else None

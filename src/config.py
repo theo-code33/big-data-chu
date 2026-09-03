@@ -29,4 +29,4 @@ CLICKHOUSE_HTTP_PORT = int(os.getenv("CLICKHOUSE_HTTP_PORT", "8123"))
 CLICKHOUSE_USER = os.getenv("CLICKHOUSE_USER", "eds_admin")
 CLICKHOUSE_PASSWORD = os.getenv("CLICKHOUSE_PASSWORD", "eds_admin")
 
-DOMAINS = ("patients", "sejours", "diagnostics", "monitoring", "referentiels")
+DOMAINS = ("patients", "sejours", "diagnostics", "monitoring", "actes", "referentiels")
