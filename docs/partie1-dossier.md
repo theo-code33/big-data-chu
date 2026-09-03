@@ -127,7 +127,19 @@ Indicateur **global** (pas par service) : `nb_readmissions / nb_sejours_silver`.
 
 Un relevé hors bornes qualité n’entre pas en `fact_monitoring` : il ne peut donc pas « alerter ». L’alerte mesure l’instabilité **parmi les constantes déjà crédibles**.
 
-Pas d’autre indicateur de pilotage (pas de vue « activité / décès / rejets » : hors §4).
+### Pilotage — évolution 2026-08-29
+
+Toujours `fact ⋈ dimension`, jamais deux faits.
+
+**Activité et DMS par catégorie** : `fact_sejour` ⋈ `dim_service`, `GROUP BY categorie`. `nb_sejours` = tous les séjours ; la DMS uniquement sur les sortis (`avgIf`). NEURO sans description → `non renseigne`.
+
+**Actes par service** : `fact_acte` ⋈ `dim_service`. Moyenne = `count() / uniqExact(stay_id)` parmi les séjours **qui ont au moins un acte**.
+
+**Actes par type** : `fact_acte` ⋈ `dim_ccam`.
+
+**Densité actes / lit** : `nb_actes / capacite_lits`. Si la capacité est NULL (NEURO), la densité est NULL — on ne divise pas par 0 et on n’impute pas de lits.
+
+**Montant T2A / service** : `sum(tarif_euros)` via `fact_acte` ⋈ `dim_ccam` ⋈ `dim_service`.
 
 ### Recherche
 
@@ -137,9 +149,10 @@ Pas d’autre indicateur de pilotage (pas de vue « activité / décès / rejets
 
 ## 6. Restitution et cloisonnement
 
-Deux dashboards Metabase, **uniquement** les graphes du §4 :
+Deux dashboards Metabase historiques (non-régression) **plus** un dashboard d’évolution, tous dans la collection Pilotage sauf la recherche :
 
 - **Pilotage hospitalier** — DMS, passages urgences, réadmission 30 j, relevés en alerte.
+- **Pilotage — actes et T2A** — catégorie, actes / service, actes / type, densité / lit, montant T2A.
 - **Recherche clinique** — prévalence par pathologie, distribution âge × sexe.
 
 Démonstration du cloisonnement :
@@ -155,7 +168,7 @@ SELECT * FROM eds_gold_recherche.prevalence_pathologie;
 
 Le cloisonnement n’est pas qu’un masque d’UI : le moteur refuse la requête.
 
-## 7 bis. Chiffres obtenus (1er–28 août 2026)
+## 7 bis. Chiffres obtenus (1er–29 août 2026)
 
 Ces volumes servent à **justifier** les KPI, pas à en tirer une conclusion médicale.
 
@@ -172,6 +185,10 @@ Ces volumes servent à **justifier** les KPI, pas à en tirer une conclusion mé
 | DMS (REA) | 9,05 j / 217,1 h (423 séjours clos) |
 | Réadmission 30 j | 780 / 6 729 = **11,59 %** |
 | Prévalence | N39 = 2 234 … G12 = 8 ; E84 = 4 et Q90 = 3 **masqués** (`< 5`) |
+| Actes silver | 8 112 (`fact_acte`) |
+| NEURO sans description | 1 rejet `service_sans_description` ; DMS catégorie `non renseigne` = 7,06 j |
+| Densité actes / lit (URGENCES) | 86,55 (1 731 / 20) ; NEURO = NULL |
+| T2A CARDIO | 521 655 € |
 
 Le lake patients ne contient que `patient_pseudo, birth_year, sex, region_code` (vérifié). Le user ClickHouse `pilotage` reçoit `ACCESS_DENIED` sur `eds_gold_recherche.*`.
 

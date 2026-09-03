@@ -147,7 +147,15 @@ Le dépôt du 29 août n’écrase pas `dim_service` : on **enrichit** (LEFT JOI
 - Prévalence / taille de cohorte par **tout** code CIM-10 posé : `nb_patients` et `nb_patients_diffusable` (NULL si n &lt; 5)
 - Description de cohorte : diagnostic **principal** × tranche d’âge 10 ans × sexe, même masque n &lt; 5
 
-Pas d’autre KPI du §4 initial. SQL historique : `sql/04_gold.sql`. Les **nouveaux** KPI (catégorie, actes, T2A) viendront après validation silver.
+**Pilotage — évolution 2026-08-29** (nouveau dashboard, les 4 KPI initiaux restent) :
+
+- Activité et DMS par **catégorie** (`fact_sejour` ⋈ `dim_service.categorie`) ; NEURO → `non renseigne`
+- Actes par service et moyenne / séjour (`fact_acte` ⋈ `dim_service` uniquement)
+- Actes par type (`fact_acte` ⋈ `dim_ccam`)
+- Densité d’actes / lit (`capacite_lits`) ; NULL si le service n’a pas de capacité
+- Montant T2A par service (somme de `tarif_euros`)
+
+SQL : `sql/04_gold.sql`.
 
 ## 9. Restitution — pourquoi ces graphiques
 
@@ -161,6 +169,11 @@ Un graphe n’est pas décoratif : il encode **une** question, pour **un** publi
 | Alertes monitoring / jour | **Courbe** | Même logique que les urgences : surveillance **au fil des jours**. Une hausse brutale (fin de mois, petits effectifs) se voit ; un tableau de 30 lignes la noie. |
 | Prévalence par pathologie | **Barres** | Comparer les **tailles de cohortes**. Tri par `nb_patients_diffusable` ; les codes `n < 5` sont **absents** du graphe (pas une barre à zéro, qui laisserait deviner une pathologie rare). |
 | Cohorte pathologie × âge × sexe | **Tableau** | Trois dimensions d’un coup (code, tranche de 10 ans, sexe). Un graphique groupé serait illisible (~cent cellules). Le chercheur **lit une case**, y compris pour vérifier qu’une maille `n < 5` n’est pas diffusée. |
+| DMS / activité par catégorie | **Barres** | Comparer 5–6 catégories (plus lisible que 8 services). NEURO apparaît à part (`non renseigne`), on ne le fond pas dans « médecine ». |
+| Actes par service | **Barres** | Volume d’actes à comparer entre services. |
+| Actes par type | **Barres** | Les plus fréquents d’abord — question de répartition, pas de série temporelle. |
+| Densité actes / lit | **Barres** | Intensité du plateau (actes rapportés à la capacité). NEURO sans lits n’a pas de barre (NULL), ce n’est pas un zéro. |
+| Montant T2A / service | **Barres** | Comparer des euros. Un camembert ferait croire à un « gâteau » de 100 % du CHU alors que NEURO est là et que la fenêtre n’est pas annuelle. |
 
 Les requêtes Metabase lisent le gold déjà agrégé : le dashboard ne recalcule pas, il **montre**.
 
@@ -169,6 +182,8 @@ Les requêtes Metabase lisent le gold déjà agrégé : le dashboard ne recalcul
 
 **Tableau de bord recherche :**
 ![image](./public/tableau-recherche.png)
+
+Un second dashboard Pilotage (**actes et T2A**) reprend les KPI du dépôt 2026-08-29, sans modifier le premier.
 
 ## 10. Incrémental
 

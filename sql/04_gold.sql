@@ -1,6 +1,6 @@
--- Gold : uniquement les indicateurs du §4 du sujet.
--- Pilotage : DMS, urgences / jour, réadmission 30 j, relevés en alerte / jour.
--- Recherche : prévalence par pathologie, cohorte âge × sexe (diag principal).
+-- Gold : KPI §4 + évolution 2026-08-29 (catégorie, actes, T2A).
+-- Pilotage : DMS, urgences, réadmission, alertes, puis actes / lits / tarifs.
+-- Recherche : prévalence, cohorte âge × sexe (diag principal).
 -- RGPD : on ne diffuse pas si l'effectif est strictement inférieur à 5
 -- (colonne *_diffusable à NULL, la ligne reste pour contrôle).
 
@@ -10,6 +10,11 @@ DROP TABLE IF EXISTS eds_gold_pilotage.readmission_30j;
 DROP TABLE IF EXISTS eds_gold_pilotage.alertes_monitoring_jour;
 DROP TABLE IF EXISTS eds_gold_pilotage.activite_par_service;
 DROP TABLE IF EXISTS eds_gold_pilotage.qualite_rejets;
+DROP TABLE IF EXISTS eds_gold_pilotage.dms_par_categorie;
+DROP TABLE IF EXISTS eds_gold_pilotage.actes_par_service;
+DROP TABLE IF EXISTS eds_gold_pilotage.actes_par_type;
+DROP TABLE IF EXISTS eds_gold_pilotage.densite_actes_par_lit;
+DROP TABLE IF EXISTS eds_gold_pilotage.montant_t2a_par_service;
 DROP TABLE IF EXISTS eds_gold_recherche.prevalence_pathologie;
 DROP TABLE IF EXISTS eds_gold_recherche.cohorte_age_sexe;
 DROP TABLE IF EXISTS eds_gold_recherche.cohorte_pathologie_age_sexe;
@@ -149,6 +154,85 @@ FROM
       AND p.sex IN ('M', 'F')
     GROUP BY code_cim10, tranche_age, sex
 ) AS agg;
+
+-- Évolution 2026-08-29 — KPI 1 : activité et DMS par catégorie de service.
+-- NEURO sans description → categorie = 'non renseigne' (pas d'imputation métier).
+CREATE TABLE eds_gold_pilotage.dms_par_categorie
+ENGINE = MergeTree
+ORDER BY categorie
+AS
+SELECT
+    ifNull(svc.categorie, 'non renseigne') AS categorie,
+    count() AS nb_sejours,
+    countIf(s.est_en_cours = 0) AS nb_sejours_sortis,
+    round(avgIf(s.duree_heures, s.est_en_cours = 0) / 24.0, 2) AS dms_jours,
+    round(avgIf(s.duree_heures, s.est_en_cours = 0), 1) AS dms_heures
+FROM eds_silver.fact_sejour AS s
+LEFT JOIN eds_silver.dim_service AS svc ON s.service_code = svc.service_code
+GROUP BY categorie;
+
+-- KPI 2 : actes par service + moyenne par séjour (séjours qui ont au moins un acte).
+-- Service recopié sur fact_acte : pas de join fact_acte ⋈ fact_sejour.
+CREATE TABLE eds_gold_pilotage.actes_par_service
+ENGINE = MergeTree
+ORDER BY service_code
+AS
+SELECT
+    a.service_code AS service_code,
+    any(svc.service_label) AS service_label,
+    count() AS nb_actes,
+    uniqExact(a.stay_id) AS nb_sejours_avec_acte,
+    round(count() / uniqExact(a.stay_id), 2) AS nb_actes_moyen_par_sejour
+FROM eds_silver.fact_acte AS a
+LEFT JOIN eds_silver.dim_service AS svc ON a.service_code = svc.service_code
+GROUP BY a.service_code;
+
+-- KPI 3 : répartition par type d'acte (les plus fréquents).
+CREATE TABLE eds_gold_pilotage.actes_par_type
+ENGINE = MergeTree
+ORDER BY code_ccam
+AS
+SELECT
+    a.code_ccam AS code_ccam,
+    any(c.libelle) AS libelle,
+    count() AS nb_actes
+FROM eds_silver.fact_acte AS a
+LEFT JOIN eds_silver.dim_ccam AS c ON a.code_ccam = c.code_ccam
+GROUP BY a.code_ccam;
+
+-- KPI 4 : densité d'actes par lit. Capacité NULL (NEURO) → densité NULL, pas 0.
+CREATE TABLE eds_gold_pilotage.densite_actes_par_lit
+ENGINE = MergeTree
+ORDER BY service_code
+AS
+SELECT
+    a.service_code AS service_code,
+    any(svc.service_label) AS service_label,
+    any(svc.capacite_lits) AS capacite_lits,
+    count() AS nb_actes,
+    if(
+        any(svc.capacite_lits) IS NULL OR any(svc.capacite_lits) = 0,
+        NULL,
+        round(count() / any(svc.capacite_lits), 2)
+    ) AS actes_par_lit
+FROM eds_silver.fact_acte AS a
+LEFT JOIN eds_silver.dim_service AS svc ON a.service_code = svc.service_code
+GROUP BY a.service_code;
+
+-- KPI 5 : montant facturé T2A par service (somme des tarifs des actes).
+CREATE TABLE eds_gold_pilotage.montant_t2a_par_service
+ENGINE = MergeTree
+ORDER BY service_code
+AS
+SELECT
+    a.service_code AS service_code,
+    any(svc.service_label) AS service_label,
+    count() AS nb_actes,
+    sum(c.tarif_euros) AS montant_euros
+FROM eds_silver.fact_acte AS a
+LEFT JOIN eds_silver.dim_service AS svc ON a.service_code = svc.service_code
+LEFT JOIN eds_silver.dim_ccam AS c ON a.code_ccam = c.code_ccam
+GROUP BY a.service_code;
 
 GRANT SELECT ON eds_gold_pilotage.* TO pilotage;
 GRANT SELECT ON eds_gold_recherche.* TO recherche;

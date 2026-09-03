@@ -414,6 +414,70 @@ def main() -> None:
         ],
     )
 
+    cards_e = []
+    cards_e.append(
+        mb.upsert_card(
+            "DMS et activité par catégorie",
+            db_p,
+            col_p,
+            "SELECT categorie, nb_sejours, nb_sejours_sortis, dms_jours, dms_heures FROM eds_gold_pilotage.dms_par_categorie ORDER BY dms_jours DESC",
+            "bar",
+            viz_bar("categorie", "dms_jours"),
+        )
+    )
+    cards_e.append(
+        mb.upsert_card(
+            "Actes par service",
+            db_p,
+            col_p,
+            "SELECT service_label, nb_actes, nb_sejours_avec_acte, nb_actes_moyen_par_sejour FROM eds_gold_pilotage.actes_par_service ORDER BY nb_actes DESC",
+            "bar",
+            viz_bar("service_label", "nb_actes"),
+        )
+    )
+    cards_e.append(
+        mb.upsert_card(
+            "Actes par type (les plus fréquents)",
+            db_p,
+            col_p,
+            "SELECT libelle, code_ccam, nb_actes FROM eds_gold_pilotage.actes_par_type ORDER BY nb_actes DESC",
+            "bar",
+            viz_bar("libelle", "nb_actes"),
+        )
+    )
+    cards_e.append(
+        mb.upsert_card(
+            "Densité d'actes par lit",
+            db_p,
+            col_p,
+            "SELECT service_label, capacite_lits, nb_actes, actes_par_lit FROM eds_gold_pilotage.densite_actes_par_lit ORDER BY actes_par_lit DESC",
+            "bar",
+            viz_bar("service_label", "actes_par_lit"),
+        )
+    )
+    cards_e.append(
+        mb.upsert_card(
+            "Montant T2A par service",
+            db_p,
+            col_p,
+            "SELECT service_label, nb_actes, montant_euros FROM eds_gold_pilotage.montant_t2a_par_service ORDER BY montant_euros DESC",
+            "bar",
+            viz_bar("service_label", "montant_euros"),
+        )
+    )
+
+    mb.upsert_dashboard(
+        "Pilotage — actes et T2A",
+        col_p,
+        [
+            (cards_e[0], 0, 0, 12, 6),
+            (cards_e[1], 0, 12, 12, 6),
+            (cards_e[2], 6, 0, 12, 6),
+            (cards_e[3], 6, 12, 8, 6),
+            (cards_e[4], 12, 12, 8, 6),
+        ],
+    )
+
     for obsolete in (
         "Activité par service",
         "Rejets qualité (traçabilité)",
