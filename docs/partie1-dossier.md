@@ -15,7 +15,7 @@ Ce que l’hôpital n’a pas demandé, et que nous ne livrons pas : un DPI, un 
 
 ## 2. Sources
 
-Accès en **lecture seule** au filestorage CHU (`source-filestorage/`). Un mois : 1er–28 août 2026 (patients : 3 dumps les 26–28).
+Accès en **lecture seule** au filestorage CHU (`source-filestorage/`). Un mois : 1er–28 août 2026, plus un dépôt d’évolution le **29** (actes + description des services + CCAM).
 
 | Source | Volume observé | Caractère |
 |---|---|---|
@@ -23,7 +23,9 @@ Accès en **lecture seule** au filestorage CHU (`source-filestorage/`). Un mois 
 | `sejours.csv` | 6 797 lignes au total | Incrémental quotidien |
 | `diagnostics.json` | un fichier / jour | 1 diagnostic principal + associés |
 | `monitoring.parquet` | 28 fichiers | Constantes ; ingéré **nativement** par ClickHouse |
-| `services.csv`, `cim10.csv` | 8 services, 13 codes CIM-10 | Référentiels **J1 seulement** |
+| `actes.parquet` | 8 112 lignes (29/08) | Nouveau flux ; pas de `service_code` sur l’acte |
+| `services.csv`, `cim10.csv` | 8 services, 13 codes CIM-10 | Référentiels **J1** |
+| `description_service.csv`, `ccam.csv` | 7 services décrits, 8 actes | Référentiels **J29** — description **incomplète** (NEURO absent) |
 
 Les 13 codes CIM-10 du référentiel sont ceux des diagnostics (dont E84, Q90, G12 : petits effectifs).
 
@@ -37,7 +39,7 @@ Voir le schéma du README. Choix qui se défendent à l’oral :
 
 - **Lake ≠ copie bit-à-bit des patients.** Le sujet dit « copie brute » *et* « aucune donnée identifiante dans l’entrepôt » *et* valorise le bonus « à l’entrée du lake ». On tranche : le filestorage CHU reste brut ; **notre** lake est déjà pseudonymisé. Sinon on stockerait NIR et nom sur le disque étudiant, ce qui est contraire à l’esprit RGPD du sujet.
 - **Bronze peu transformé.** Typage + colonnes techniques `_source_date`, `_ingested_at`. On peut reconstruire silver si la règle FC change.
-- **Silver = vérité métier**, 3 faits **sans lien entre eux** (chacun ne joint qu’aux dimensions). Modèle : [`docs/modele-silver.md`](modele-silver.md).
+- **Silver = vérité métier**, 4 faits **sans lien entre eux** (chacun ne joint qu’aux dimensions). Modèle : [`docs/modele-silver.md`](modele-silver.md).
 - **Deux gold.** Cloisonnement réel (GRANT SQL), pas un simple onglet Metabase.
 - **Pas de pandas** sur le monitoring : `file(..., Parquet)` dans ClickHouse.
 
@@ -57,7 +59,7 @@ Sur `sejours.csv` : même hash de `patient_id` pour conserver les jointures. `di
 
 `diagnostics.json` → NDJSON aplati (`stay_id`, `code_cim10`, `type`) : changement de **format d’ingestion**, pas de règle métier.
 
-Monitoring et référentiels : copie telle quelle (pas de PII).
+Monitoring, actes et référentiels : copie telle quelle (pas de PII).
 
 ### 4.2 Bronze
 
@@ -73,14 +75,17 @@ Tables typées, partitionnées par `_source_date`. Ingestion **incrémentale** :
 | `discharge_ts` NULL | **conservé**, `est_en_cours = 1` | — |
 | FC ∉ [20,250], SpO2 ∉ [50,100], temp ∉ [30,45] | écarté | `valeur_hors_plage` |
 | Diagnostic d’un séjour aux dates inversées | **conservé** dans `fact_diagnostic` (le séjour est écarté de `fact_sejour`) | — |
+| Service sans ligne dans `description_service` | **conservé** dans `dim_service`, `categorie` / `pole` / `capacite_lits` = NULL | `service_sans_description` |
+| Acte sans séjour | écarté | `sejour_introuvable` |
+| Acte d’un séjour aux dates inversées | **conservé** dans `fact_acte` (le service est lu dans `bronze.sejours`) | — |
 
-On **n’impute pas** une date de sortie, on ne « corrige » pas une FC à 15 bpm. On n’est pas médecins.
+On **n’impute pas** une date de sortie, on ne « corrige » pas une FC à 15 bpm, on n’invente pas une catégorie pour NEURO. On n’est pas médecins.
 
 `discharge_mode` vide sur un séjour **sorti** : hors liste imposée, **conservé**. Signalé ici comme dette qualité (export incomplet), pas comme rejet silencieux.
 
-Enrichissements : `duree_heures` et `est_en_cours` sur le **fait séjour** ; `age_approx` sur **`dim_patient`**. Les libellés restent dans `dim_service` / `dim_cim10` (pas recopiés dans les faits).
+Enrichissements : `duree_heures` et `est_en_cours` sur le **fait séjour** ; `age_approx` sur **`dim_patient`** ; `service_code` recopié sur **`fact_acte`** depuis `bronze.sejours` (jamais depuis `fact_sejour`). Les libellés, tarifs et la hiérarchie restent dans les dimensions.
 
-Le modèle (3 faits + dimensions) : [`modele-silver.md`](modele-silver.md).
+Le modèle (4 faits + dimensions) : [`modele-silver.md`](modele-silver.md).
 
 ### 4.4 Gold
 

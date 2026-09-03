@@ -27,17 +27,18 @@ Les données de santé sont une catégorie particulière (RGPD art. 9). La confo
 
 ## 3. Sources (ce que le CHU dépose)
 
-Lecture seule : [`../source-filestorage/`](../source-filestorage/). On **copie** vers notre lake, on ne écrit jamais dans le dépôt CHU.
+Lecture seule : [`source-filestorage/`](source-filestorage/). On **copie** vers notre lake, on ne écrit jamais dans le dépôt CHU.
 
 | Famille | Format | Rythme observé | Rôle |
 |---|---|---|---|
-| `patients/` | CSV | Dump **complet** qui grossit (~4 800 → 5 400 → 6 000) | Identité + IPP. **PII** |
-| `sejours/` | CSV | ~5 000 **nouveaux** séjours / jour | Passage hospitalier |
+| `patients/` | CSV | 3 dumps complets (6 000 lignes) | Identité + IPP. **PII** |
+| `sejours/` | CSV | 6 797 lignes, incrémental quotidien | Passage hospitalier |
 | `diagnostics/` | JSON imbriqué | 1 principal + 0..n associés / séjour | CIM-10 |
 | `monitoring/` | Parquet | Relevés de constantes au chevet | Volume (principe Big Data) |
-| `referentiels/` | CSV | Déposés **le premier jour seulement** | Libellés services et CIM-10 |
+| `actes/` | Parquet | Dépôt **2026-08-29** (8 112 actes) | Actes CCAM (nouveau flux) |
+| `referentiels/` | CSV | J1 : services + CIM-10 ; **J29** : description_service + CCAM | Libellés, hiérarchie, tarifs T2A |
 
-Jours fournis : `2026-08-26` à `2026-08-28`.
+Jours fournis : `2026-08-01` à `2026-08-29` (patients : 26–28 ; actes et description : le 29 seulement).
 
 Observations qui ont guidé le modèle :
 
@@ -74,7 +75,7 @@ Filestorage CHU (lecture seule)
 |---|---|---|
 | **Lake** | Copie de travail. Pour les patients / séjours : déjà pseudonymisée | Le CHU reste intouchable. Le bonus RGPD exige que l’identité **n’entre pas** dans notre zone |
 | **Bronze** | Fichiers → tables typées (`Date`, `DateTime`, types numériques) + `_source_date` / `_ingested_at` | On peut **rejouer** silver/gold sans relire les fichiers. On sait d’où vient chaque ligne |
-| **Silver** | Qualité + **3 faits autonomes** (séjour, diagnostic, monitoring) + dimensions | Un fait ne joint **jamais** un autre fait, seulement des dimensions. [`docs/modele-silver.md`](docs/modele-silver.md) |
+| **Silver** | Qualité + **4 faits autonomes** (séjour, diagnostic, monitoring, acte) + dimensions | Un fait ne joint **jamais** un autre fait, seulement des dimensions. [`docs/modele-silver.md`](docs/modele-silver.md) |
 | **Gold** | Indicateurs **déjà agrégés**, un schéma par usage | Le dashboard ne recalcule pas la DMS. Le cloisonnement se fait ici (GRANT), pas dans l’UI seule |
 
 Pourquoi **ne pas** tout nettoyer en bronze ? Parce qu’une règle métier (bornes FC, séjour inversé) peut évoluer. Bronze reste proche du fichier ; on reconstruit silver sans ré-ingérer.
@@ -125,8 +126,12 @@ On n’est pas médecins. Le sujet demande de **détecter**, **écarter**, **tra
 | FC hors 20–250, SpO2 hors 50–100, temp hors 30–45 °C | Rejet monitoring |
 | Sexe | Normalisé `M`/`F` ; autre valeur → rejet |
 | Dates / horodatages invalides | Rejet |
+| Service absent de `description_service.csv` | **Conservé** dans `dim_service`, attributs NULL ; tracé `service_sans_description` |
+| Acte sans séjour | Rejet `sejour_introuvable` |
 
 `discharge_mode` vide alors que le séjour est sorti existe dans les fichiers : ce n’est **pas** dans la liste des rejets imposés, on conserve la ligne et on le signale dans le dossier.
+
+Le dépôt du 29 août n’écrase pas `dim_service` : on **enrichit** (LEFT JOIN). NEURO reste, sans catégorie ni lits. Le `service_code` des actes est recopié depuis `bronze.sejours` à l’ETL — on ne joint jamais deux faits.
 
 ## 8. Indicateurs (gold) — strictement le §4 du sujet
 
@@ -142,7 +147,7 @@ On n’est pas médecins. Le sujet demande de **détecter**, **écarter**, **tra
 - Prévalence / taille de cohorte par **tout** code CIM-10 posé : `nb_patients` et `nb_patients_diffusable` (NULL si n &lt; 5)
 - Description de cohorte : diagnostic **principal** × tranche d’âge 10 ans × sexe, même masque n &lt; 5
 
-Pas d’autre KPI. SQL : `sql/04_gold.sql`.
+Pas d’autre KPI du §4 initial. SQL historique : `sql/04_gold.sql`. Les **nouveaux** KPI (catégorie, actes, T2A) viendront après validation silver.
 
 ## 9. Restitution — pourquoi ces graphiques
 
@@ -224,9 +229,10 @@ Mots de passe : `.env` / `.env.example`. Pour démontrer le cloisonnement, ouvri
 
 ## 13. Limites assumées
 
-- **Un mois** de dépôt (1er–28 août 2026) : la réadmission à 30 jours reste bornée par la fin de fenêtre.
+- **Un mois** de dépôt (1er–29 août 2026) : la réadmission à 30 jours reste bornée par la fin de fenêtre ; les actes n’arrivent que le 29.
 - **Âge approximatif** : année de naissance seulement (minimisation) → `2026 - birth_year`, tranches de 10 ans.
-- **Données d’exercice** (identités fictives, 13 codes CIM-10 dont deux cohortes &lt; 5).
+- **Données d’exercice** (identités fictives, 13 codes CIM-10 dont deux cohortes &lt; 5, 8 actes CCAM).
+- **Référentiel incomplet** : NEURO sans description — conservé, pas imputé.
 - Pas de cluster, pas d’Airflow : stack laptop, justifiée plus haut.
 - Le sel de hash, s’il change, **casse** l’historique des jointures — ne pas le rotator sans règle de migration.
 
