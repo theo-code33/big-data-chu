@@ -237,8 +237,8 @@ python scripts/setup_metabase.py
 |---|---|---|
 | ClickHouse Play | http://localhost:8123/play | `eds_admin` / voir `.env` |
 | Metabase | http://localhost:3000 | `admin@chu.local` |
-| Dashboard pilotage | collection Pilotage | `pilotage@chu.local` |
-| Dashboard recherche | collection Recherche | `recherche@chu.local` |
+| Dashboards pilotage (2) | collection Pilotage (« Pilotage hospitalier » et « Pilotage — actes et T2A ») | `pilotage@chu.local` |
+| Dashboard recherche (1) | collection Recherche (« Recherche clinique ») | `recherche@chu.local` |
 
 Mots de passe : `.env` / `.env.example`. Pour démontrer le cloisonnement, ouvrir Metabase avec `pilotage@chu.local` puis avec `recherche@chu.local` : chaque compte ne voit **que** sa collection. En SQL, `pilotage` ne peut pas lire `eds_gold_recherche`.
 

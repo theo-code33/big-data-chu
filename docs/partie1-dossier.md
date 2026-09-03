@@ -174,6 +174,7 @@ Ces volumes servent à **justifier** les KPI, pas à en tirer une conclusion mé
 
 | Couche / contrôle | Effectif |
 |---|---|
+| Fichiers traités au total (`eds_ops.fichiers_traites`) | **92** (89 initiaux + 3 évolution 29/08) |
 | Bronze patients (3 dumps) | 18 000 |
 | Silver `dim_patient` (dédupliqués) | 6 000 |
 | Bronze séjours | 6 797 |
@@ -182,15 +183,21 @@ Ces volumes servent à **justifier** les KPI, pas à en tirer une conclusion mé
 | Bronze monitoring | 41 778 |
 | Silver `fact_monitoring` | 40 920 |
 | Rejets constantes hors plage | 858 |
+| Bronze actes (`eds_bronze.actes`) | 8 112 |
+| Silver actes (`eds_silver.fact_acte`) | 8 112 (0 rejet `sejour_introuvable`) |
+| Référentiel CCAM (`dim_ccam`) | 8 actes |
+| Description services (`dim_service`) | 8 services (7 décrits + NEURO attributs NULL) |
+| Rejet référentiel `service_sans_description` | 1 (NEURO) |
 | DMS (REA) | 9,05 j / 217,1 h (423 séjours clos) |
+| DMS par catégorie (`non renseigne` / NEURO) | 7,06 j / 169,5 h (1 077 séjours clos) |
 | Réadmission 30 j | 780 / 6 729 = **11,59 %** |
 | Prévalence | N39 = 2 234 … G12 = 8 ; E84 = 4 et Q90 = 3 **masqués** (`< 5`) |
-| Actes silver | 8 112 (`fact_acte`) |
-| NEURO sans description | 1 rejet `service_sans_description` ; DMS catégorie `non renseigne` = 7,06 j |
-| Densité actes / lit (URGENCES) | 86,55 (1 731 / 20) ; NEURO = NULL |
-| T2A CARDIO | 521 655 € |
+| Top acte CCAM | ZBQK001 (Radio thorax) : 1 043 actes |
+| Densité actes / lit max (URGENCES) | 86,55 (1 731 actes / 20 lits) ; NEURO = NULL |
+| T2A CARDIO | 521 655 € (1 935 actes) |
+| Total facturé T2A CHU | **2 199 445 €** (8 112 actes) |
 
-Le lake patients ne contient que `patient_pseudo, birth_year, sex, region_code` (vérifié). Le user ClickHouse `pilotage` reçoit `ACCESS_DENIED` sur `eds_gold_recherche.*`.
+Le lake patients ne contient que `patient_pseudo, birth_year, sex, region_code` (vérifié). Le user ClickHouse `pilotage` reçoit `ACCESS_DENIED` sur `eds_gold_recherche.*` et inversement pour `recherche` sur `eds_gold_pilotage.*`.
 
 ## 7. Limites et recommandations
 

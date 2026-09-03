@@ -164,9 +164,9 @@ INSERT INTO eds_silver.dim_service
 SELECT
     s.service_code AS service_code,
     s.service_label AS service_label,
-    if(d.service_code = '', NULL, d.categorie) AS categorie,
-    if(d.service_code = '', NULL, d.capacite_lits) AS capacite_lits,
-    if(d.service_code = '', NULL, d.pole) AS pole
+    if(d.service_code = '' OR isNull(d.service_code), NULL, d.categorie) AS categorie,
+    if(d.service_code = '' OR isNull(d.service_code), NULL, d.capacite_lits) AS capacite_lits,
+    if(d.service_code = '' OR isNull(d.service_code), NULL, d.pole) AS pole
 FROM
 (
     SELECT
@@ -301,4 +301,11 @@ SELECT
     a.acte_ts,
     a._source_date AS source_date
 FROM eds_bronze.actes AS a
-INNER JOIN eds_bronze.sejours AS s ON a.stay_id = s.stay_id;
+INNER JOIN
+(
+    SELECT
+        stay_id,
+        argMax(service_code, _ingested_at) AS service_code
+    FROM eds_bronze.sejours
+    GROUP BY stay_id
+) AS s ON a.stay_id = s.stay_id;

@@ -112,7 +112,7 @@ Pourquoi pas l’écarter : la DMS NEURO existe déjà, la non-régression l’i
 
 ### Service de l’acte
 
-L’acte n’a pas de `service_code`. Le service est celui du **séjour**. On le recopie à l’ETL depuis `bronze.sejours`, pas depuis `fact_sejour`.
+L’acte n’a pas de `service_code`. Le service est celui du **séjour**. On le recopie à l’ETL depuis `bronze.sejours` (avec `GROUP BY stay_id` et `argMax(service_code, _ingested_at)` pour garantir une stricte idempotence), jamais depuis `fact_sejour`. Cela proscrit toute jointure fait-à-fait en couche Gold (`fact_acte ⋈ fact_sejour`).
 
 ## 4. Un fait = une famille d’indicateurs
 
