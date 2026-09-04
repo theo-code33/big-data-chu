@@ -156,7 +156,10 @@ def discover_dates() -> list[date]:
             continue
         for child in folder.iterdir():
             if child.is_dir():
-                found.add(date.fromisoformat(child.name))
+                try:
+                    found.add(date.fromisoformat(child.name))
+                except ValueError:
+                    continue
     return sorted(found)
 
 

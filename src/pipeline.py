@@ -56,16 +56,25 @@ def apply_sql_bootstrap(client) -> None:
             client.command(stmt)
 
 
-def latest_statut(client, source_path: str) -> str | None:
+def rel_source_path(path: Path) -> str:
+    try:
+        return path.relative_to(SOURCE_FILESTORAGE).as_posix()
+    except ValueError:
+        return path.as_posix()
+
+
+def latest_statut(client, domaine: str, source_date: date, rel_path: str) -> str | None:
     result = client.query(
         """
         SELECT statut
         FROM eds_ops.fichiers_traites
-        WHERE source_path = {p:String}
+        WHERE domaine = {domaine:String}
+          AND source_date = {source_date:Date}
+          AND (source_path = {rel:String} OR endsWith(source_path, {rel:String}))
         ORDER BY finished_at DESC
         LIMIT 1
         """,
-        parameters={"p": source_path},
+        parameters={"domaine": domaine, "source_date": source_date, "rel": rel_path},
     )
     if result.row_count == 0:
         return None
@@ -158,8 +167,8 @@ def process_domain(
     if domaine == "referentiels":
         return _process_referentiels(client, source_date, src, force, retry_errors)
 
-    src_str = str(src)
-    statut = latest_statut(client, src_str)
+    rel_path = rel_source_path(src)
+    statut = latest_statut(client, domaine, source_date, rel_path)
     if statut == "ok" and not force:
         logger.info("Déjà traité %s %s — skip", domaine, source_date)
         return False
@@ -184,18 +193,18 @@ def process_domain(
             raise ValueError(domaine)
 
         table, loader = LOADERS[domaine]
-        if force and statut == "ok":
+        if force:
             drop_bronze_partition(client, table, source_date)
         n_load = loader(client, source_date)
         n = n_load or n_copy
-        record_file(client, src_str, domaine, source_date, checksum, n, "ok", f"lake={dest}", started)
+        record_file(client, rel_path, domaine, source_date, checksum, n, "ok", f"lake={dest}", started)
         logger.info("OK %s %s (%s lignes)", domaine, source_date, n)
         return True
     except Exception as exc:
         logger.exception("ERREUR %s %s", domaine, source_date)
         record_file(
             client,
-            src_str,
+            rel_path,
             domaine,
             source_date,
             checksum,
@@ -210,8 +219,8 @@ def process_domain(
 def _process_referentiels(client, source_date: date, src_dir: Path, force: bool, retry_errors: bool) -> bool:
     did = False
     for name, src, dest, n_copy in copy_referentiels(source_date, src_dir):
-        src_str = str(src)
-        statut = latest_statut(client, src_str)
+        rel_path = rel_source_path(src)
+        statut = latest_statut(client, "referentiels", source_date, rel_path)
         if statut == "ok" and not force:
             logger.info("Déjà traité referentiel %s — skip", name)
             continue
@@ -222,12 +231,12 @@ def _process_referentiels(client, source_date: date, src_dir: Path, force: bool,
         try:
             loader = REF_LOADERS[name]
             n = loader(client, source_date)
-            record_file(client, src_str, "referentiels", source_date, checksum, n or n_copy, "ok", f"lake={dest}", started)
+            record_file(client, rel_path, "referentiels", source_date, checksum, n or n_copy, "ok", f"lake={dest}", started)
             logger.info("OK referentiel %s (%s lignes)", name, n or n_copy)
             did = True
         except Exception as exc:
             logger.exception("ERREUR referentiel %s", name)
-            record_file(client, src_str, "referentiels", source_date, checksum, 0, "erreur", str(exc), started)
+            record_file(client, rel_path, "referentiels", source_date, checksum, 0, "erreur", str(exc), started)
             did = True
     return did
 
@@ -249,12 +258,21 @@ def rebuild_curated(client, run_id: str) -> None:
         raise
 
 
+def curated_tables_exist(client) -> bool:
+    try:
+        res = client.query("SELECT count() FROM system.tables WHERE database = 'eds_silver'")
+        return int(res.first_row[0]) > 0
+    except Exception:
+        return False
+
+
 def run(
     dates: list[date] | None = None,
     force: bool = False,
     retry_errors: bool = False,
     bronze_only: bool = False,
-) -> None:
+    rebuild_if_no_changes: bool = True,
+) -> int:
     run_id = uuid.uuid4().hex[:12]
     started_all = datetime.now()
     logger.info("Run %s — source=%s", run_id, SOURCE_FILESTORAGE)
@@ -265,17 +283,26 @@ def run(
     if not todo:
         logger.warning("Aucune date découverte dans %s", SOURCE_FILESTORAGE)
         record_run(client, run_id, "pipeline", "ok", "aucune date", started_all)
-        return
+        return 0
 
+    files_processed = 0
     for source_date in todo:
         logger.info("=== Jour %s ===", source_date)
         for domaine in ("referentiels", "patients", "sejours", "diagnostics", "monitoring", "actes"):
-            process_domain(client, domaine, source_date, force, retry_errors)
+            if process_domain(client, domaine, source_date, force, retry_errors):
+                files_processed += 1
 
-    if not bronze_only:
+    curated_missing = not curated_tables_exist(client)
+    should_rebuild = (not bronze_only) and (files_processed > 0 or curated_missing or rebuild_if_no_changes or force)
+
+    if should_rebuild:
         rebuild_curated(client, run_id)
-    record_run(client, run_id, "pipeline", "ok", f"dates={','.join(d.isoformat() for d in todo)}", started_all)
-    logger.info("Run %s terminé", run_id)
+        record_run(client, run_id, "pipeline", "ok", f"dates={','.join(d.isoformat() for d in todo)}, files={files_processed}", started_all)
+    else:
+        logger.info("Aucun nouveau fichier ingéré (%s dates vérifiées). Silver/Gold déjà à jour.", len(todo))
+
+    logger.info("Run %s terminé (%d fichier(s) traité(s))", run_id, files_processed)
+    return files_processed
 
 
 def main() -> None:
