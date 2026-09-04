@@ -162,7 +162,7 @@ ENGINE = MergeTree
 ORDER BY categorie
 AS
 SELECT
-    ifNull(svc.categorie, 'non renseigne') AS categorie,
+    assumeNotNull(if(svc.categorie IS NULL OR svc.categorie = '', 'non renseigne', svc.categorie)) AS categorie,
     count() AS nb_sejours,
     countIf(s.est_en_cours = 0) AS nb_sejours_sortis,
     round(avgIf(s.duree_heures, s.est_en_cours = 0) / 24.0, 2) AS dms_jours,
