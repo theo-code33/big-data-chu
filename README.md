@@ -2,7 +2,7 @@
 
 Projet fil rouge Big Data (M2). Les données hospitalières arrivent chaque jour dans un filestorage hétérogène. Ce dépôt construit un EDS en architecture **médaillon**, pour deux usages qui ne doivent pas se mélanger : le **pilotage** et la **recherche clinique**.
 
-Ce README justifie les choix. Le détail des formules, des contrôles et des limites est dans [`docs/partie1-dossier.md`](docs/partie1-dossier.md). Le **modèle Silver** (grain, clés, cardinalités) est dans [`docs/modele-silver.md`](docs/modele-silver.md). L’exploitation est dans [`docs/partie2-exploitation.md`](docs/partie2-exploitation.md).
+Ce README justifie les choix techniques. Le détail des formules est dans [`docs/partie1-dossier.md`](docs/partie1-dossier.md). Le **modèle Silver** est dans [`docs/modele-silver.md`](docs/modele-silver.md). L’exploitation est dans [`docs/partie2-exploitation.md`](docs/partie2-exploitation.md). Le rapport final du projet est dans [`rapport.md`](rapport.md).
 
 ## 1. Contexte et besoin
 
