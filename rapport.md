@@ -8,7 +8,7 @@
 2. [Justification du projet](#2-justification-du-projet)
 3. [Prérequis](#3-prérequis)
 4. [Livrables](#4-livrables)
-5. [Sources - ce que le CHU dépose](#5-sources--ce-que-le-chu-dépose)
+5. [Sources - ce que le CHU dépose](#5-sources--ce-que-le-chu-dépose) (dont [dictionnaire](#51-dictionnaire-de-données-colonnes-du-filestorage))
 6. [Architecture médaillon - pourquoi ces couches](#6-architecture-médaillon--pourquoi-ces-couches)
 7. [Choix de stack (et ce qu'on écarte)](#7-choix-de-stack-et-ce-quon-écarte)
 8. [RGPD - décisions de conception](#8-rgpd--décisions-de-conception)
@@ -73,11 +73,11 @@ Bronze reste **proche du fichier** (typage, provenance). Silver porte la **quali
 
 ### 2.3 Pourquoi ces indicateurs (et pas d'autres)
 
-Le §4 du sujet initial fixe **six** KPI. L'évolution du 29 août en ajoute **cinq**. On n'en invente aucun ; chaque graphe Metabase correspond à une phrase du besoin. Le détail (formule, graphe, chiffre, lecture juste vs abusive) est aux [§12](#12-rapport-des-indicateurs--partie-i-sujet-initial) et [§13](#13-justification-de-lévolution--partie-ii-2026-08-29).
+Le §4 du sujet initial fixe **six** KPI, plus « toute autre vue d'activité pertinente ». L'évolution du 29 août en ajoute **cinq** (pas un sixième par pôle : `pole` est dans la dimension, pas dans un KPI demandé). Chaque graphe Metabase correspond à une phrase du besoin. Le détail est aux [§12](#12-rapport-des-indicateurs--partie-i-sujet-initial) et [§13](#13-justification-de-lévolution--partie-ii-2026-08-29).
 
 | Partie | Dashboards | KPI |
 |---|---|---|
-| **I - sujet initial** | Pilotage hospitalier + Recherche clinique | DMS / service, urgences / jour, réadmission 30 j, alertes / jour, prévalence, cohorte âge × sexe |
+| **I - sujet initial** | Pilotage hospitalier + Recherche clinique | DMS / service, urgences / jour (+ présents encore / durée), réadmission 30 j, alertes / jour, prévalence, cohorte âge × sexe |
 | **II - évolution** | Pilotage - actes et T2A (**ajouté**, le premier n'est pas modifié) | DMS / catégorie, actes / service, actes / type, densité / lit, T2A / service |
 
 Non-régression constatée après le 29 : DMS réa toujours **9,05 j**, réadmission toujours **11,59 %**, N39 toujours **2 234**.
@@ -168,7 +168,7 @@ Côté hôte, `CLICKHOUSE_HOST=localhost` (déjà dans `.env.example`). Depuis u
 
 ```bash
 export DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib   # macOS Homebrew
-pandoc README_new.md -o README.pdf --pdf-engine=weasyprint \
+pandoc rapport.md -o rapport.pdf --pdf-engine=weasyprint \
   --resource-path=. -V lang=fr --css=docs/justification-pdf.css \
   --syntax-highlighting=none
 ```
@@ -226,6 +226,57 @@ Jours fournis : `2026-08-01` à `2026-08-29` (patients : 26–28 ; actes et desc
 - `patient_id`, `nir`, `nom`, `prenom` sont des identifiants directs → **interdits** dans l'entrepôt.
 - Le dump patients ne change pas les attributs d'un IPP déjà vu (contrôle effectué J1 vs J3). On déduplique quand même : c'est la règle demandée, et elle restera juste le jour où un reverse administratif corrigera une date de naissance.
 - Les 13 codes CIM-10 du référentiel sont ceux des diagnostics (dont E84, Q90, G12 : petits effectifs).
+
+<a id="51-dictionnaire-de-données-colonnes-du-filestorage"></a>
+### 5.1 Dictionnaire de données (colonnes du filestorage)
+
+Repris de la fiche sujet et de la consigne d'évolution. **PII** = n'entre pas dans le lake / l'entrepôt.
+
+**`patients.csv`** (identité réelle)
+
+| Colonne | Type | Description | Dans l'entrepôt |
+|---|---|---|---|
+| `patient_id` | texte | IPP, clé de jointure avec les séjours | Hashé → `patient_pseudo` |
+| `nir` | texte | N° de sécurité sociale | **Supprimé** |
+| `nom` | texte | Nom | **Supprimé** |
+| `prenom` | texte | Prénom | **Supprimé** |
+| `birth_date` | date | Date de naissance complète | Généralisée → `birth_year` |
+| `sex` | texte | M / F | Conservé, normalisé |
+| `region_code` | texte | Département de résidence | Conservé (grain géographique possible ; aucun KPI gold actuel ne l'agrège) |
+
+**`sejours.csv`** (un séjour = un passage)
+
+| Colonne | Type | Description |
+|---|---|---|
+| `stay_id` | texte | Identifiant du séjour |
+| `patient_id` | texte | Référence patient (hashée comme ci-dessus) |
+| `service_code` | texte | Service d'hospitalisation |
+| `admission_ts` | horodatage | Entrée |
+| `discharge_ts` | horodatage | Sortie ; vide = séjour en cours |
+| `admission_mode` | texte | urgence, programme, mutation |
+| `discharge_mode` | texte | domicile, mutation, transfert, deces… |
+
+**`diagnostics.json`** — structure imbriquée : `stay_id` + liste `{ code_cim10, type }` (`principal` ou `associe`). Aplati en NDJSON à l'entrée du lake.
+
+**`monitoring.parquet`**
+
+| Colonne | Type |
+|---|---|
+| `stay_id` | texte |
+| `ts` | horodatage |
+| `heart_rate` | entier (bpm) |
+| `spo2` | entier (%) |
+| `temp_c` | décimal (°C) |
+
+**Référentiels J1** : `services.csv` (`service_code` → libellé), `cim10.csv` (code → libellé).
+
+**Dépôt 2026-08-29**
+
+| Fichier | Colonnes |
+|---|---|
+| `description_service.csv` | `service_code`, `categorie`, `capacite_lits`, `pole` |
+| `ccam.csv` | `code_ccam`, `libelle`, `tarif_euros` |
+| `actes.parquet` | `stay_id`, `code_ccam`, `acte_ts` (pas de `service_code` sur l'acte) |
 
 ---
 
@@ -306,7 +357,7 @@ Le sujet propose une stack qui tient sur un laptop. On la suit, et on justifie.
 | Principe | Mise en œuvre |
 |---|---|
 | **Pseudonymisation à l'entrée** | `patient_id` → `SHA-256(sel \| IPP)` = `patient_pseudo` (stable). Sel dans `.env`, jamais dans git |
-| **Minimisation** | `nir`, `nom`, `prenom` **supprimés** dès la copie. Date de naissance **généralisée à l'année** (`birth_year`). Le lake ne contient plus ces colonnes |
+| **Minimisation** | `nir`, `nom`, `prenom` **supprimés** dès la copie. Date de naissance **généralisée à l'année** (`birth_year`). `region_code` est conservé (attribut patient, pas une mesure) mais **aucun KPI gold ne l'agrège** : on ne l'a pas inventé pour un graphe |
 | **Cloisonnement** | 2 bases gold, 2 users ClickHouse (`pilotage` / `recherche`), 2 collections Metabase, 2 comptes applicatifs. Un `SELECT` SQL hors périmètre est refusé par ClickHouse, pas seulement caché dans l'UI |
 | **Petits effectifs** | En recherche, `nb_patients_diffusable` est `NULL` si `nb_patients < 5` (la ligne reste, le chiffre n'est pas diffusé) |
 | **Traçabilité** | `_source_date`, `_ingested_at`, table `eds_ops.fichiers_traites`, `eds_ops.runs`, table `eds_silver.rejets` (règle, séjour, jour source) |
@@ -485,6 +536,8 @@ Ce n'est pas une redondance : trois **niveaux d'agrégation** croissants.
 
 `capacite_lits` est un attribut du service (plateau), pas une mesure de fait.
 
+**Pourquoi pas de KPI gold par pôle.** La consigne d'évolution demande de **compléter** `dim_service` (catégorie, lits, pôle) et liste **cinq** indicateurs. Aucun n'est « par pôle ». On charge `pole` (LEFT JOIN) pour que le grain existe demain (`GROUP BY pole` sans changer le modèle). On n'invente pas un sixième graphe : ce serait hors sujet, et NEURO n'a pas de pôle (NULL), le même piège 1 qu'en catégorie.
+
 ### 10.4 Deux pièges du dépôt 2026-08-29
 
 **Service non décrit** : `description_service.csv` a **7** lignes, `services.csv` en a **8**. **NEURO** n'a ni catégorie, ni lits, ni pôle. Choix : on **conserve** NEURO dans `dim_service` (LEFT JOIN), attributs à **NULL**. On n'impute pas (« médecine » serait un mensonge). On **trace** (`rejets.service_sans_description`). Pourquoi ne pas l'écarter : la DMS NEURO existe déjà, la non-régression l'interdit.
@@ -621,17 +674,17 @@ Un graphe n’est pas décoratif : il encode **une** question, pour **un** publi
 
 #### KPI 2 - Activité des urgences : passages par jour
 
-**Ce que le sujet demande.** « Activité des urgences : passages par jour ».
+**Ce que le sujet demande.** « Activité des urgences : passages par jour », plus « toute autre vue d'activité pertinente ».
 
 **Pourquoi le service URGENCES, pas le mode d’admission.** `admission_mode = urgence` existe aussi en cardiologie (entrée non programmée dans un autre service). Le besoin DIM est la charge **du plateau urgences** : `service_code = 'URGENCES'`. On groupe par jour d’admission (`toDate(admission_ts)`).
 
-**Colonnes sorties.** `nb_passages` (le KPI demandé), plus `nb_encore_presents` (sortie encore vide à la fin de la fenêtre) et `duree_moy_heures` (moyenne sur les clos : `avg` ignore les NULL). Ces deux colonnes justifient la lecture de fin de mois ; elles ne remplacent pas le graphe principal.
+**Vue d'activité en plus (phrase du §4).** Le graphe principal reste `nb_passages`. On publie aussi `nb_encore_presents` (séjours de ce jour **sans** `discharge_ts` à la fin de la fenêtre) et `duree_moy_heures` (moyenne sur les clos : `avg` ignore les NULL). Ce n'est pas un septième KPI inventé : c'est la lecture de fin de mois que le seul nombre de passages ne permet pas (un pic de « encore présents » dit que la fenêtre s'arrête, pas que le service sature).
 
 **Pourquoi une courbe.** L’ordre des 28 jours compte. On cherche un pic, un creux, une rupture. Des barres quotidiennes marcheraient, mais la ligne lit mieux un **flux**.
 
 **Résultats.** Montée progressive jusqu’à un pic vers le 21 août (~82 passages). Chute nette après le 25 : 9, 11 puis 16 passages les 26–28 août. `nb_encore_presents` est à 0 jusqu’au 15, puis non nul (des patients admis ces jours-là n’ont pas encore de sortie dans le dépôt).
 
-**Interprétation.** La chute de fin août **n’est pas** « les urgences se vident ». C’est la **fin de la fenêtre d’ingestion** : moins de nouveaux fichiers, séjours encore ouverts. Confondre ça avec une tendance hospitalière serait une erreur de lecture. Le pic du 21 est un maximum **dans le mois simulé**, pas une épidémie démontrée.
+**Interprétation.** La chute de fin août **n’est pas** « les urgences se vident ». C’est la **fin de la fenêtre d’ingestion** : moins de nouveaux fichiers, séjours encore ouverts. Confondre ça avec une tendance hospitalière serait une erreur de lecture. Le pic du 21 est un maximum **dans le mois simulé**, pas une épidémie démontrée. `nb_encore_presents` documente exactement cette limite.
 
 #### KPI 3 - Taux de réadmission à 30 jours
 
@@ -649,7 +702,7 @@ Un graphe n’est pas décoratif : il encode **une** question, pour **un** publi
 
 **Ce que le sujet demande.** « Surveillance des constantes : relevés en alerte / jour ».
 
-**Pourquoi deux familles de seuils.** Le sujet donne des bornes **qualité** en silver (FC 20–250, SpO2 50–100, temp 30–45) : hors plage → **rejet**, pas une alerte. L’alerte gold est plus stricte, parmi les relevés **déjà crédibles** : FC &lt; 50 ou &gt; 100, SpO2 &lt; 92, T° &gt; 38,5. Un SpO2 à 10 % n’alerte pas (il n’entre pas en `fact_monitoring`). Un SpO2 à 91 % alerte.
+**Pourquoi deux familles de seuils.** La fiche sujet ne donne que des bornes **qualité** (FC 20–250, SpO2 50–100, temp 30–45 °C) : hors plage → **rejet** en silver, pas une alerte. « Relevés en alerte » n'a pas de bornes dans la fiche. On les aligne sur le **corrigé de niveau 1** (jeu seed 42) et sur le sens clinique usuel d'une alerte de monitoring, **parmi les relevés déjà crédibles** : FC &lt; 50 ou &gt; 100, SpO2 &lt; 92, T° &gt; 38,5. Un SpO2 à 10 % n’alerte pas (il n’entre pas en `fact_monitoring`). Un SpO2 à 91 % alerte.
 
 **Sortie gold.** Par jour : `nb_releves`, `nb_alertes`, `taux_alertes_pct`. Le graphe montre `nb_alertes` (volume de surveillance), le taux est dans la table pour expliquer les 29–30 août.
 
@@ -716,13 +769,13 @@ Le chercheur n’a **pas** la DMS ni les réadmissions. Il a des **tailles de co
 | KPI | Graphe | Chiffre à retenir | Lecture juste | Lecture abusive |
 |---|---|---|---|---|
 | DMS / service | Barres | Réa 9,05 j ; urgences 2,15 j | Gradient clinique, dimensionnement | « La réa est inefficace » |
-| Urgences / jour | Courbe | Pic ~82 le 21/08, chute après le 25 | Fenêtre d’ingestion | « Les urgences se vident » |
+| Urgences / jour | Courbe | Pic ~82 le 21/08, chute après le 25 | Fenêtre d’ingestion ; `nb_encore_presents` = vue d’activité extra | « Les urgences se vident » |
 | Réadmission 30 j | Tableau | **11,59 %** (780 / 6 729) | Aligné corrigé, plancher | Taux annuel de qualité |
-| Alertes / jour | Courbe | ~7–9 % des relevés | Charge de surveillance | Gravité individuelle |
+| Alertes / jour | Courbe | ~7–9 % des relevés | Charge de surveillance (seuils d’alerte ≠ rejet) | Gravité individuelle |
 | Prévalence | Barres | N39 = 2 234 ; E84/Q90 masqués | Cohortes + k-anonymat | « Pas de mucoviscidose » |
 | Âge × sexe | Tableau | C34 masculin 50–79 ; E11 mixte | Description de cohorte | Inférence médicale |
 
-Les quatre graphes de la figure 1 et les deux de la figure 2 **couvrent tout le §4**. Rien n’est « en plus » ; rien du §4 n’est manquant.
+Les quatre graphes de la figure 1 et les deux de la figure 2 **couvrent tout le §4**. La vue d'activité extra (`nb_encore_presents`, `duree_moy_heures`) est dans le gold urgences, pas un dashboard séparé.
 
 ---
 
@@ -775,7 +828,7 @@ Même règles graphiques qu’en partie I : **barres** partout ici, parce que to
 
 **Ce que le sujet d’évolution demande.** « Nombre de séjours et durée moyenne de séjour, regroupés par **catégorie** de service » → exploite `categorie` de `dim_service`.
 
-**Pourquoi ce KPI maintenant.** Avant le 29, on n’avait que le service élémentaire. La hiérarchie `service_label → categorie → pole` sert à **changer de grain**, pas à répéter le libellé. La médecine = CARDIO + PNEUMO + ONCO. Une DMS « médecine » n’existait pas en partie I.
+**Pourquoi ce KPI maintenant.** Avant le 29, on n’avait que le service élémentaire. La hiérarchie `service_label → categorie → pole` sert à **changer de grain**, pas à répéter le libellé. La médecine = CARDIO + PNEUMO + ONCO. Une DMS « médecine » n’existait pas en partie I. On s’arrête à la **catégorie** parce que c’est le KPI demandé ; le pôle est chargé dans `dim_service` mais n’a pas de table gold (voir §10.3).
 
 **Sortie.** `nb_sejours` (tous, y compris en cours : l’**activité**), `nb_sejours_sortis` et `dms_jours` / `dms_heures` (`avgIf` sur les clos seulement). NEURO → `non renseigne`.
 
@@ -921,7 +974,7 @@ Les KPI de la **partie I** restent les figures 1 et 2. La figure 3 s’**ajoute*
 | 10. Densité / lit | `fact_acte` ⋈ `dim_service.capacite_lits` | Barres | Urgences plus tendues que la cardio ; NEURO = NULL |
 | 11. T2A / service | `fact_acte` ⋈ `dim_ccam` ⋈ `dim_service` | Barres | Valorisation possible même si la description de service manque |
 
-**Oral, une phrase.** On a fait évoluer le médaillon (bronze incrémental, dimension enrichie, quatrième fait autosuffisant), **justifié les deux pièges**, et **ajouté** cinq KPI sans retoucher les six de la partie I.
+**Oral, une phrase.** On a fait évoluer le médaillon (bronze incrémental, dimension enrichie, quatrième fait autosuffisant), **justifié les deux pièges**, et **ajouté** cinq KPI sans retoucher les six de la partie I. `pole` est dans `dim_service` ; il n'a pas de graphe, parce que le sujet n'en demande pas.
 
 ---
 
@@ -1236,7 +1289,7 @@ La lecture de chaque KPI (graphe, interprétation, lecture abusive) est aux §12
 
 ```text
 .
-├── README_new.md               # document unique (architecture + KPI + exploitation)
+├── rapport.md                  # document unique (architecture + KPI + exploitation)
 ├── docker-compose.yml          # ClickHouse + Metabase + pipeline + scheduler
 ├── Dockerfile                  # image Python 3.12 d'orchestration
 ├── .env.example                # sel et mots de passe - copier vers .env
