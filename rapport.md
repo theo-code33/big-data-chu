@@ -1,6 +1,12 @@
-# Entrepôt de Données de Santé (EDS) - CHU
+# Entrepôt de Données de Santé (EDS) — CHU
 
-> Les données hospitalières arrivent chaque jour dans un filestorage hétérogène (CSV, JSON, Parquet). Ce dépôt construit un EDS en architecture **médaillon** (lake → bronze → silver → gold), pour deux usages cloisonnés : le **pilotage hospitalier** et la **recherche clinique**.
+**Rapport de projet** — fil rouge Big Data (M2).
+
+Les données hospitalières arrivent chaque jour dans un filestorage hétérogène (CSV, JSON, Parquet). Ce dépôt construit un EDS en architecture **médaillon** (lake → bronze → silver → gold), pour deux usages cloisonnés : le **pilotage hospitalier** et la **recherche clinique**.
+
+Le présent document est le **rendu écrit** du projet. Il couvre la partie 1 (conception, modèle, indicateurs) et la partie 2 (pipeline, droits, exploitation). Les formules SQL sont dans `sql/04_gold.sql` ; chaque chiffre des dashboards se retrouve au `clickhouse-client`.
+
+**Périmètre des chiffres.** Du 1er au 29 août 2026. 6 000 patients silver, 6 729 séjours, 40 920 relevés de constantes, 8 112 actes. Jeu d'exercice : les écarts de structure sont reproductibles dans ClickHouse ; ils ne constituent pas une épidémiologie de terrain.
 
 ## Table des matières
 
@@ -58,10 +64,10 @@ Le sujet n'est pas « mettre des fichiers dans une base ». C'est construire un 
 | Contrainte du CHU | Si on l'ignore | Décision prise |
 |---|---|---|
 | Formats hétérogènes, dépôt quotidien | Rejeu manuel, doublons, KPI instables | Médaillon + watermark `eds_ops.fichiers_traites` |
-| Identité dans `patients.csv` (NIR, nom, IPP) | Données art. 9 sur le disque étudiant | Pseudonymisation **à l'entrée du lake** (bonus) |
+| Identité dans `patients.csv` (NIR, nom, IPP) | Données art. 9 sur le disque de travail | Pseudonymisation **à l'entrée du lake** (bonus) |
 | Deux usages (DIM vs recherche) | Un dashboard avec un filtre | Deux gold, deux users SQL, deux collections |
 | On n'est pas médecins | « Corriger » une FC à 15 ou une date inversée | Écarter + tracer dans `rejets` |
-| Volume pédagogique = monitoring Parquet | Charger en pandas | `file(..., Parquet)` dans ClickHouse |
+| Volume Parquet (monitoring, actes) | Lire les fichiers hors du moteur | `file(..., Parquet)` dans ClickHouse |
 | Dépôt incomplet le 29 (NEURO absent) | Imputer une catégorie / des lits | NULL + rejet `service_sans_description` |
 | L'acte n'a pas de service | Joindre deux faits en gold | Recopie `service_code` à l'ETL depuis bronze |
 
@@ -69,7 +75,7 @@ Le sujet n'est pas « mettre des fichiers dans une base ». C'est construire un 
 
 Bronze reste **proche du fichier** (typage, provenance). Silver porte la **qualité et le modèle** (étoile, 4 faits sans lien). Gold porte les **phrases du besoin** déjà agrégées. Si la borne FC change, on reconstruit silver/gold **sans** relire 28 Parquet. Si le DIM veut un nouveau graphe, on ajoute une table gold, on ne touche pas au lake.
 
-**Python pilote, ClickHouse transforme** : l'anti-pattern du cours (tout passer par pandas) ne passe pas à l'échelle et n'est pas le métier d'un entrepôt colonne.
+**Python orchestre, ClickHouse transforme.** L'ingestion bronze se fait par `file()` dans le moteur (CSV, JSONEachRow, Parquet). Qualité, étoile silver et KPI gold sont du SQL (`sql/03_silver.sql`, `sql/04_gold.sql`). Python recopie le lake, hashe l'IPP à l'entrée (stdlib `csv` / `hashlib`, ligne à ligne), envoie le SQL et journalise.
 
 ### 2.3 Pourquoi ces indicateurs (et pas d'autres)
 
@@ -82,12 +88,12 @@ Le §4 du sujet initial fixe **six** KPI, plus « toute autre vue d'activité pe
 
 Non-régression constatée après le 29 : DMS réa toujours **9,05 j**, réadmission toujours **11,59 %**, N39 toujours **2 234**.
 
-### 2.4 Choix structurants à défendre à l'oral
+### 2.4 Décisions structurantes
 
 1. **Lake déjà pseudonymisé** - le filestorage CHU reste brut ; notre copie de travail n'a plus NIR / nom / prénom.
 2. **Pas de jointure fait–fait** - un KPI = un fait ⋈ dimensions (sauf auto-jointure du *même* `fact_sejour` pour la réadmission).
 3. **Deux gold + GRANT** - le cloisonnement est un refus SQL, pas un onglet caché.
-4. **n < 5 masqué** en recherche - E84 (4) et Q90 (3) existent en gold enseignant, absents du graphe.
+4. **n < 5 masqué** en recherche - E84 (4) et Q90 (3) restent dans la table gold (contrôle) ; ils sont absents du graphe diffusé.
 5. **Évolution incrémentale** - bronze s'append ; `dim_service` s'enrichit en LEFT JOIN ; NEURO n'est pas écarté (sinon la DMS neurologie de la partie I disparaît).
 
 ---
@@ -134,7 +140,7 @@ cp .env.example .env
 | `EDS_PSEUDO_SALT` | Oui | Sel du hash SHA-256. Changer le sel **après** ingestion casse toutes les jointures `patient_pseudo` |
 | `SOURCE_FILESTORAGE` | Oui | Défaut `./source-filestorage` |
 | `LAKE_ROOT` | Oui | Défaut `./lake` (gitignoré) |
-| Comptes ClickHouse / Metabase | Déjà dans `.env.example` | Suffisants pour la démo ; ne pas committer `.env` |
+| Comptes ClickHouse / Metabase | Déjà dans `.env.example` | Suffisants pour le rendu ; ne pas committer `.env` |
 
 `.env` est gitignoré. Sans ce fichier, le pipeline Compose n'a pas le sel.
 
@@ -155,9 +161,9 @@ pip install -r requirements.txt
 
 Côté hôte, `CLICKHOUSE_HOST=localhost` (déjà dans `.env.example`). Depuis un conteneur Compose, l'hôte ClickHouse est le nom de service `clickhouse`.
 
-### 3.5 Optionnel - export PDF de ce document
+### 3.5 Optionnel — export PDF du présent rapport
 
-**`pdflatex` n'est pas requis** (TeX Live n'est pas un prérequis du projet).
+**`pdflatex` n'est pas requis** (TeX Live n'est pas un prérequis du projet). Le rapport est ce fichier Markdown ; un PDF peut être produit ainsi :
 
 | Logiciel | Rôle |
 |---|---|
@@ -175,7 +181,7 @@ pandoc rapport.md -o rapport.pdf --pdf-engine=weasyprint \
 
 ### 3.6 Ce qui n'est **pas** un prérequis
 
-- pandas, Spark, Airflow, Prefect
+- Spark, Airflow, Prefect
 - Client ClickHouse natif (`clickhouse-client`) - l'UI http://localhost:8123/play suffit
 - Compte cloud, cluster, GPU
 - Clé API Metabase - `scripts/setup_metabase.py` crée l'admin au premier lancement
@@ -196,7 +202,7 @@ Ports : rien ne doit déjà écouter sur 3000 / 8123 / 9000.
 
 | Partie | Ce qui est livré |
 |---|---|
-| **Partie 1 - Conception** | Chaîne lake → bronze → silver → gold, deux dashboards Metabase (+ un troisième d'évolution), cloisonnement des droits, ce dossier |
+| **Partie 1 - Conception** | Chaîne lake → bronze → silver → gold, deux dashboards Metabase (+ un troisième d'évolution), cloisonnement des droits, le présent rapport |
 | **Partie 2 - Exploitation** | Pipeline incrémental rejouable, scheduler automatisé, journalisation, gestion d'erreur, reprise sur incident |
 | **Bonus** | Pseudonymisation **à l'entrée du lake** : aucune identité n'atteint ClickHouse |
 
@@ -312,33 +318,33 @@ Filestorage CHU (lecture seule)
 | **Silver** | Qualité + **4 faits autonomes** (séjour, diagnostic, monitoring, acte) + dimensions | Un fait ne joint **jamais** un autre fait, seulement des dimensions |
 | **Gold** | Indicateurs **déjà agrégés**, un schéma par usage | Le dashboard ne recalcule pas la DMS. Le cloisonnement se fait ici (GRANT), pas dans l'UI seule |
 
-**Choix défendus à l'oral** :
+**Décisions d'architecture** :
 
-- **Lake ≠ copie bit-à-bit des patients.** Le sujet dit « copie brute » *et* « aucune donnée identifiante dans l'entrepôt » *et* valorise le bonus « à l'entrée du lake ». On tranche : le filestorage CHU reste brut ; **notre** lake est déjà pseudonymisé. Sinon on stockerait NIR et nom sur le disque étudiant, ce qui est contraire à l'esprit RGPD du sujet.
-- **Bronze peu transformé.** Typage + colonnes techniques `_source_date`, `_ingested_at`. Si la règle FC change demain, on reconstruit silver sans ré-ingérer.
+- **Lake ≠ copie bit-à-bit des patients.** Le sujet demande une « copie brute » *et* « aucune donnée identifiante dans l'entrepôt », tout en valorisant le bonus « à l'entrée du lake ». Le filestorage CHU reste brut ; **notre** lake est déjà pseudonymisé. Conserver NIR et nom sur le disque de travail du projet serait contraire à l'esprit RGPD du sujet.
+- **Bronze peu transformé.** Typage + colonnes techniques `_source_date`, `_ingested_at`. Si la règle FC change, on reconstruit silver sans ré-ingérer.
 - **Silver = vérité métier**, 4 faits **sans lien entre eux** (chacun ne joint qu'aux dimensions).
 - **Deux gold.** Cloisonnement réel (GRANT SQL), pas un simple onglet Metabase.
-- **Pas de pandas** sur le monitoring : `file(..., Parquet)` dans ClickHouse.
+- **Transformations dans ClickHouse.** Parquet, CSV et NDJSON sont lus par `file()`. Silver et gold sont du SQL dans le moteur.
 
-Anti-pattern du cours : charger le monitoring en pandas, transformer en mémoire, renvoyer le résultat. Ça ne passe pas à l'échelle. **Python pilote, ClickHouse transforme.**
+**Python orchestre, ClickHouse transforme.** Le volume et les agrégations restent dans l'entrepôt colonne ; Python n'ouvre pas les Parquet.
 
 ---
 
 <a id="7-choix-de-stack-et-ce-quon-écarte"></a>
 ## 7. Choix de stack (et ce qu'on écarte)
 
-Le sujet propose une stack qui tient sur un laptop. On la suit, et on justifie.
+Le sujet propose une stack qui tient sur un laptop. Elle est retenue et justifiée ci-dessous.
 
 | Brique | Rôle | Pourquoi |
 |---|---|---|
 | **ClickHouse 24.8** (Docker) | Entrepôt colonne | Parquet natif, SQL dans le moteur, UI `:8123/play`, agrégations très rapides |
-| **Python 3.12** | Orchestrateur | Recopie, hash RGPD, envoi du SQL, logs. Module `csv` / `json` stdlib pour réécrire les petits fichiers **sans pandas** |
-| **Metabase ≥ 0.55** (Docker, driver ClickHouse intégré) | Dashboards | Restitution sans code, collections et groupes pour la démo de cloisonnement |
+| **Python 3.12** | Orchestrateur | Recopie lake, hash RGPD, dispatch SQL, logs (stdlib `csv` / `json` / `hashlib`) |
+| **Metabase ≥ 0.55** (Docker, driver ClickHouse intégré) | Dashboards | Restitution sans code, collections et groupes pour le cloisonnement des droits |
 | **Docker Compose** | Runtime | Un `up` suffit. Pas d'install ClickHouse divergente selon la machine |
 
-**Ce qu'on n'utilise pas (ce n'est pas un oubli)** :
+**Hors périmètre (volontaire)** :
 
-- **pandas / Spark** pour la transformation métier - anti-pattern ici ; le volume pédagogique est le monitoring, conçu pour rester dans le moteur.
+- **Spark** : disproportionné. Le volume (Parquet) et les agrégations restent dans ClickHouse.
 - **Airflow / Prefect** - disproportionné pour un mois de fichiers et un laptop. Un scheduler Python + table de watermark fait l'incrémental et la reprise. En production on remplacerait ce scheduler par Airflow ; le SQL médaillon ne changerait pas.
 
 **Dépendances Python** (`requirements.txt`) :
@@ -387,7 +393,7 @@ Monitoring, actes et référentiels : copie telle quelle (pas de PII).
 
 ### 9.2 Bronze
 
-Tables typées, partitionnées par `_source_date`. Ingestion **incrémentale** : un jour déjà `ok` n'est pas réinséré (`eds_ops.fichiers_traites`). `--force` droppe la partition du jour puis réinjecte.
+Tables typées, partitionnées par `_source_date`. Chaque `INSERT` est un `SELECT … FROM file(...)` **exécuté par ClickHouse** (CSV, JSONEachRow, Parquet) : Python n'ouvre pas les Parquet. Ingestion **incrémentale** : un jour déjà `ok` n'est pas réinséré (`eds_ops.fichiers_traites`). `--force` droppe la partition du jour puis réinjecte.
 
 | Table bronze | Engine | Partitionnement | Clé d'ordre |
 |---|---|---|---|
@@ -405,7 +411,7 @@ Les référentiels utilisent `ReplacingMergeTree` pour ne garder que la version 
 
 ### 9.3 Silver - contrôles et enrichissements
 
-Rebuild complet depuis bronze à chaque run (volume faible, idempotent, règles qualité toujours à jour).
+Rebuild **SQL** complet depuis bronze à chaque run (volume faible, idempotent, règles qualité toujours à jour). Aucune de ces règles n'est appliquée en Python.
 
 | Règle | Action | Table de rejets |
 |---|---|---|
@@ -427,7 +433,7 @@ On **n'impute pas** une date de sortie, on ne « corrige » pas une FC à 15 bpm
 
 ### 9.4 Gold
 
-Rebuild complet depuis silver à chaque run (cheap). Droits ré-appliqués après `DROP TABLE` (ClickHouse retire les GRANT au drop).
+Rebuild SQL complet depuis silver à chaque run (`sql/04_gold.sql`). Droits ré-appliqués après `DROP TABLE` (ClickHouse retire les GRANT au drop). Metabase lit ces tables, il ne recalcule pas les KPI.
 
 ---
 
@@ -649,7 +655,7 @@ Un graphe n’est pas décoratif : il encode **une** question, pour **un** publi
 
 **Ce que le sujet demande.** « Durée Moyenne de Séjour (DMS) par service ».
 
-**Pourquoi le sortir ainsi.** La DMS mesure la **rotation des lits**. Le DIM compare les services entre eux, pas « l’hôpital en un seul chiffre » (une moyenne unique noierait la réa dans les urgences). On ne retient que les séjours **sortis** : un séjour en cours n’a pas de `discharge_ts`, donc pas de durée. L’inclure imposerait d’inventer une date de fin - interdit par le sujet (on n’impute pas).
+**Pourquoi cette restitution.** La DMS mesure la **rotation des lits**. Le DIM compare les services entre eux, pas « l’hôpital en un seul chiffre » (une moyenne unique noierait la réa dans les urgences). On ne retient que les séjours **sortis** : un séjour en cours n’a pas de `discharge_ts`, donc pas de durée. L’inclure imposerait d’inventer une date de fin - interdit par le sujet (on n’impute pas).
 
 **Formule.** Pour chaque service, moyenne de `(sortie − entrée) / 24 h` sur `fact_sejour` où `est_en_cours = 0`, joint à `dim_service` pour le libellé. On publie aussi `dms_heures` (même moyenne, autre unité) et `nb_sejours` (sortis uniquement), pour que le taux soit opposable.
 
@@ -726,7 +732,7 @@ Le chercheur n’a **pas** la DMS ni les réadmissions. Il a des **tailles de co
 
 **Pourquoi des patients distincts, tout code posé.** Une cohorte de recherche se compte en **personnes**, pas en lignes de diagnostic. Le corrigé (N39 = 2 234, E84 = 4, Q90 = 3) ne se reproduit que si l’on compte **principal et associé**, y compris les diagnostics d’un séjour aux dates inversées (le séjour est écarté de `fact_sejour`, pas le codage). Filtrer sur le seul principal sous-estimerait N39 d’un facteur ~2,5.
 
-**Sortie gold.** `nb_patients` (contrôle / enseignant) et `nb_patients_diffusable` (NULL si n &lt; 5). Le dashboard ne trace que `nb_patients_diffusable IS NOT NULL`.
+**Sortie gold.** `nb_patients` (effectif réel, pour contrôle) et `nb_patients_diffusable` (NULL si n &lt; 5). Le dashboard ne trace que `nb_patients_diffusable IS NOT NULL`.
 
 **Pourquoi des barres.** Comparer 11 cohortes publiables, triées par taille. **Pas de barre à zéro** pour E84/Q90 : une barre vide dirait « cette maladie rare est dans l’EDS ».
 
@@ -748,7 +754,7 @@ Le chercheur n’a **pas** la DMS ni les réadmissions. Il a des **tailles de co
 | E84 | Mucoviscidose | 4 | **masqué** |
 | Q90 | Trisomie 21 | 3 | **masqué** |
 
-**Interprétation.** Les trois premières cohortes (&gt; 2 000) sont des **comorbidités fréquentes** : beaucoup de patients ont N39/E11/I50 en associé, pas forcément comme motif d’entrée. G12 = 8 **est publié** : la règle est n &lt; 5, pas n &lt; 10. E84 et Q90 existent en gold (l’enseignant peut vérifier le 4 et le 3) mais **pas** sur le graphe. « Il n’y a pas de mucoviscidose dans l’EDS » serait faux : elle est masquée.
+**Interprétation.** Les trois premières cohortes (&gt; 2 000) sont des **comorbidités fréquentes** : beaucoup de patients ont N39/E11/I50 en associé, pas forcément comme motif d'entrée. G12 = 8 **est publié** : la règle est n &lt; 5, pas n &lt; 10. E84 et Q90 existent en gold (4 et 3, vérifiables par requête) mais **pas** sur le graphe. « Il n'y a pas de mucoviscidose dans l'EDS » serait faux : elle est masquée.
 
 #### KPI 6 - Description de cohorte : âge × sexe
 
@@ -766,7 +772,7 @@ Le chercheur n’a **pas** la DMS ni les réadmissions. Il a des **tailles de co
 
 ### 12.4 Synthèse de la partie I
 
-| KPI | Graphe | Chiffre à retenir | Lecture juste | Lecture abusive |
+| KPI | Graphe | Résultat | Lecture juste | Lecture abusive |
 |---|---|---|---|---|
 | DMS / service | Barres | Réa 9,05 j ; urgences 2,15 j | Gradient clinique, dimensionnement | « La réa est inefficace » |
 | Urgences / jour | Courbe | Pic ~82 le 21/08, chute après le 25 | Fenêtre d’ingestion ; `nb_encore_presents` = vue d’activité extra | « Les urgences se vident » |
@@ -828,7 +834,7 @@ Même règles graphiques qu’en partie I : **barres** partout ici, parce que to
 
 **Ce que le sujet d’évolution demande.** « Nombre de séjours et durée moyenne de séjour, regroupés par **catégorie** de service » → exploite `categorie` de `dim_service`.
 
-**Pourquoi ce KPI maintenant.** Avant le 29, on n’avait que le service élémentaire. La hiérarchie `service_label → categorie → pole` sert à **changer de grain**, pas à répéter le libellé. La médecine = CARDIO + PNEUMO + ONCO. Une DMS « médecine » n’existait pas en partie I. On s’arrête à la **catégorie** parce que c’est le KPI demandé ; le pôle est chargé dans `dim_service` mais n’a pas de table gold (voir §10.3).
+**Justification.** Avant le 29, le modèle n’avait que le service élémentaire. La hiérarchie `service_label → categorie → pole` sert à **changer de grain**, pas à répéter le libellé. La médecine = CARDIO + PNEUMO + ONCO. Une DMS « médecine » n’existait pas en partie I. Le grain retenu est la **catégorie**, seul KPI demandé ; le pôle est chargé dans `dim_service` mais n’a pas de table gold (voir §10.3).
 
 **Sortie.** `nb_sejours` (tous, y compris en cours : l’**activité**), `nb_sejours_sortis` et `dms_jours` / `dms_heures` (`avgIf` sur les clos seulement). NEURO → `non renseigne`.
 
@@ -845,7 +851,7 @@ Même règles graphiques qu’en partie I : **barres** partout ici, parce que to
 | pédiatrie | 503 | 448 | 3,19 |
 | urgences | 1 423 | 1 277 | 2,15 |
 
-**Interprétation.** La médecine est le **volume** (2 652 séjours) avec une DMS de 5,71 j - moyenne des trois services médicaux, tirée vers le haut par l’onco et la pneumo, vers le bas par la cardio. La réa reste l’extrême de durée (identique à la partie I, 9,05 j : non-régression). `non renseigne` a **exactement** la DMS neurologie : on n’a perdu aucune journée, on a refusé de mentir sur la catégorie. C’est le graphe qui **montre** le piège 1 au DIM.
+**Interprétation.** La médecine est le **volume** (2 652 séjours) avec une DMS de 5,71 j - moyenne des trois services médicaux, tirée vers le haut par l’onco et la pneumo, vers le bas par la cardio. La réa reste l’extrême de durée (identique à la partie I, 9,05 j : non-régression). `non renseigne` a **exactement** la DMS neurologie : aucune journée n’a été perdue, et aucune catégorie n’a été imputée. Ce graphe documente le piège 1 (référentiel incomplet) pour le DIM.
 
 #### KPI 8 - Nombre d’actes par service (et moyenne par séjour)
 
@@ -881,7 +887,7 @@ Même règles graphiques qu’en partie I : **barres** partout ici, parce que to
 
 **Sortie.** `code_ccam`, `libelle`, `nb_actes`.
 
-**Pourquoi des barres.** Huit types, tri du plus fréquent au moins fréquent. Pas de courbe (pas de temps dans la question). Pas de camembert (parts quasi égales, illisibles, et 8 parts pédagogiques ≠ mix réel d’un CHU).
+**Pourquoi des barres.** Huit types, tri du plus fréquent au moins fréquent. Pas de courbe (pas de temps dans la question). Pas de camembert (parts quasi égales, illisibles, et 8 parts d’un jeu d’exercice ≠ mix réel d’un CHU).
 
 **Résultats.**
 
@@ -896,7 +902,7 @@ Même règles graphiques qu’en partie I : **barres** partout ici, parce que to
 | NEJA001 | IRM cérébrale | 982 |
 | HHFA001 | Appendicectomie | 978 |
 
-**Interprétation.** Les effectifs sont **volontairement voisins** (978–1 043) : le générateur pédagogique n’imite pas un CHU où la radio écraserait la chirurgie. On retient un léger tropisme « imagerie et suivi » au-dessus de l’appendicectomie. Pour le rendu, l’intérêt est le **libellé collé au code** et la preuve que `dim_ccam` est jointe. Ce n’est pas un ranking médical à commenter en staff.
+**Interprétation.** Les effectifs sont **volontairement voisins** (978–1 043) : le générateur du jeu n'imite pas un CHU où la radio écraserait la chirurgie. On retient un léger tropisme « imagerie et suivi » au-dessus de l'appendicectomie. L'intérêt du graphe est le **libellé collé au code** et la preuve que `dim_ccam` est jointe, pas un classement médical.
 
 #### KPI 10 - Densité d’actes par lit
 
@@ -933,7 +939,7 @@ Même règles graphiques qu’en partie I : **barres** partout ici, parce que to
 
 **Formule.** `sum(tarif_euros)` sur `fact_acte ⋈ dim_ccam ⋈ dim_service`. Un fait, deux dimensions : autorisé.
 
-**Pourquoi des barres.** Comparer des euros. Un camembert ferait croire à un budget annuel du CHU (faux : 8 actes, un mois, tarifs forfaitaires pédagogiques).
+**Pourquoi des barres.** Comparer des euros. Un camembert ferait croire à un budget annuel du CHU (faux : 8 actes, un mois, tarifs forfaitaires du jeu d’exercice).
 
 **Résultats.**
 
@@ -948,7 +954,7 @@ Même règles graphiques qu’en partie I : **barres** partout ici, parce que to
 | Chirurgie | 564 | 147 145 |
 | Oncologie | 241 | 64 265 |
 
-**Interprétation.** L’ordre suit surtout le **volume d’actes**, modulé par le mix (une appendicectomie à 800 € pèse plus qu’une radio à 25 €). La chir a presque autant d’actes que la réa mais un peu moins d’euros ici. **NEURO a 393 850 €** : on peut facturer sans connaître les lits. Densité et T2A **divergent** volontairement sur NEURO - c’est la démonstration du piège 1 au DIM : incomplet pour le plateau, complet pour les actes.
+**Interprétation.** L'ordre suit surtout le **volume d'actes**, modulé par le mix (une appendicectomie à 800 € pèse plus qu'une radio à 25 €). La chir a presque autant d'actes que la réa mais un peu moins d'euros ici. **NEURO a 393 850 €** : on peut facturer sans connaître les lits. Densité et T2A **divergent** sur NEURO : le référentiel est incomplet pour le plateau, complet pour les actes (piège 1).
 
 **Limite.** Ce n’est pas la recette T2A réelle (GHS, sévérité, séjours sans acte, coefficients). C’est la somme de 8 tarifs d’exercice.
 
@@ -958,7 +964,7 @@ Les KPI de la **partie I** restent les figures 1 et 2. La figure 3 s’**ajoute*
 
 | Lecture abusive (évolution) | Pourquoi c’est faux |
 |---|---|
-| « La cardio est le service le plus rentable du CHU » | 8 codes, un mois, tarifs pédagogiques. |
+| « La cardio est le service le plus rentable du CHU » | 8 codes, un mois, tarifs du jeu d’exercice. |
 | « NEURO est à 0 acte / lit, service mort » | Capacité inconnue ; 1 471 actes et 393 k€ T2A. |
 | « Il faut fermer l’onco, densité 6,89 » | Chimio absente du CCAM fourni ; séjour long, peu de ces 8 gestes. |
 | « 1,6 acte / séjour partout = pipeline cassé » | Jeu généré à peu près uniforme ; le volume, lui, varie. |
@@ -966,15 +972,15 @@ Les KPI de la **partie I** restent les figures 1 et 2. La figure 3 s’**ajoute*
 
 ### 13.5 Synthèse de la partie II
 
-| KPI évolution | Fait ⋈ dimension | Graphe | Message |
+| KPI évolution | Fait ⋈ dimension | Graphe | Lecture |
 |---|---|---|---|
 | 7. DMS / activité par catégorie | `fact_sejour` ⋈ `dim_service.categorie` | Barres | Médecine = volume ; `non renseigne` = NEURO assumé |
 | 8. Actes / service + moyenne | `fact_acte` ⋈ `dim_service` | Barres | Volume ≠ intensité par séjour (moyenne plate) |
-| 9. Actes / type | `fact_acte` ⋈ `dim_ccam` | Barres | Libellés CCAM ; volumes pédagogiquement proches |
+| 9. Actes / type | `fact_acte` ⋈ `dim_ccam` | Barres | Libellés CCAM ; volumes volontairement proches (jeu d’exercice) |
 | 10. Densité / lit | `fact_acte` ⋈ `dim_service.capacite_lits` | Barres | Urgences plus tendues que la cardio ; NEURO = NULL |
 | 11. T2A / service | `fact_acte` ⋈ `dim_ccam` ⋈ `dim_service` | Barres | Valorisation possible même si la description de service manque |
 
-**Oral, une phrase.** On a fait évoluer le médaillon (bronze incrémental, dimension enrichie, quatrième fait autosuffisant), **justifié les deux pièges**, et **ajouté** cinq KPI sans retoucher les six de la partie I. `pole` est dans `dim_service` ; il n'a pas de graphe, parce que le sujet n'en demande pas.
+**Synthèse.** Le médaillon a été étendu (bronze incrémental, dimension enrichie, quatrième fait autosuffisant), les deux pièges ont été traités, et **cinq** KPI ont été ajoutés sans modifier les six de la partie I. `pole` est dans `dim_service` ; il n'a pas de graphe, parce que le sujet n'en demande pas.
 
 ---
 
@@ -1133,7 +1139,7 @@ SELECT * FROM eds_gold_pilotage.montant_t2a_par_service ORDER BY montant_euros D
 <a id="18-exploitation--lancement-et-commandes"></a>
 ## 18. Exploitation - lancement et commandes
 
-Les prérequis complets (machine, Docker, `.env`, Python hôte, PDF) sont au [§3](#3-prérequis).
+Cette section décrit la procédure de reproduction : lancement, comptes, et commandes utiles. Les prérequis complets (machine, Docker, `.env`, Python hôte, PDF) sont au [§3](#3-prérequis).
 
 ### Premier lancement
 
@@ -1157,7 +1163,7 @@ python -m src.pipeline --all
 python scripts/setup_metabase.py
 ```
 
-### URLs et comptes
+### URLs et comptes de reproduction
 
 | Service | URL |
 |---|---|
@@ -1232,7 +1238,7 @@ Le cloisonnement Metabase (OSS) se fait par **collections** : `pilotage@chu.loca
 
 **Ne pas faire** une fois l'historique chargé. Tous les `patient_pseudo` changeraient : jointures cassées, gold faux.
 
-Procédure de migration (prod, pas ce TP) : nouvelle colonne hash_v2, double écriture, bascule, puis drop v1 - sel dans un coffre, pas dans git.
+Procédure de migration (production, hors de ce projet) : nouvelle colonne hash_v2, double écriture, bascule, puis drop v1 — sel dans un coffre, pas dans git.
 
 ### Reset complet (données d'exercice)
 
@@ -1289,7 +1295,7 @@ La lecture de chaque KPI (graphe, interprétation, lecture abusive) est aux §12
 
 ```text
 .
-├── rapport.md                  # document unique (architecture + KPI + exploitation)
+├── rapport.md                  # rapport écrit (architecture + KPI + exploitation)
 ├── docker-compose.yml          # ClickHouse + Metabase + pipeline + scheduler
 ├── Dockerfile                  # image Python 3.12 d'orchestration
 ├── .env.example                # sel et mots de passe - copier vers .env
@@ -1313,7 +1319,7 @@ La lecture de chaque KPI (graphe, interprétation, lecture abusive) est aux §12
 ├── scripts/
 │   └── setup_metabase.py       # provisionnement dashboards + users + droits
 ├── docs/
-│   ├── justification-pdf.css   # mise en page PDF de ce README
+│   ├── justification-pdf.css   # mise en page PDF du présent rapport
 │   └── img/                    # captures Metabase (3 dashboards)
 ├── public/                     # captures alternatives (pilotage, recherche)
 ├── source-filestorage/         # dépôt CHU (lecture seule)

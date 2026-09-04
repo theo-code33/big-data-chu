@@ -66,7 +66,7 @@ def load_diagnostics(client, source_date: date) -> int:
 
 
 def load_monitoring(client, source_date: date) -> int:
-    """Parquet lu par ClickHouse (file()) — pas de passage par Python/pandas."""
+    """Parquet lu par ClickHouse (`file()`)."""
     rel = f"lake/monitoring/{source_date.isoformat()}/monitoring.parquet"
     client.command(
         _file(
@@ -81,7 +81,7 @@ def load_monitoring(client, source_date: date) -> int:
 
 
 def load_actes(client, source_date: date) -> int:
-    """Parquet lu par ClickHouse (file()) — pas de passage par Python/pandas."""
+    """Parquet lu par ClickHouse (`file()`)."""
     rel = f"lake/actes/{source_date.isoformat()}/actes.parquet"
     client.command(
         _file(
